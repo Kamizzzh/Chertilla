@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentRef, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -81,8 +81,6 @@ type Props = {
    */
   onSubmit: (input: CoordinateInput) => string | null;
 };
-
-type InputRef = RefObject<ComponentRef<typeof TextInput> | null>;
 
 /** Тексты всех полей окна: X, Y, X2, Y2, радиус (или диаметр), угол, угол 2. */
 type FieldTexts = {
@@ -199,13 +197,9 @@ export function CoordinateModal({
     }
   }
 
-  const xRef = useRef<ComponentRef<typeof TextInput>>(null);
-  const yRef = useRef<ComponentRef<typeof TextInput>>(null);
-  const x2Ref = useRef<ComponentRef<typeof TextInput>>(null);
-  const y2Ref = useRef<ComponentRef<typeof TextInput>>(null);
-  const rRef = useRef<ComponentRef<typeof TextInput>>(null);
-  const aRef = useRef<ComponentRef<typeof TextInput>>(null);
-  const a2Ref = useRef<ComponentRef<typeof TextInput>>(null);
+  // Узлы TextInput, заполняются callback-ref'ами при монтировании (React вызывает их после
+  // отрисовки — чтения ref во время рендера здесь нет).
+  const inputNodes = useRef<Partial<Record<FieldKey, ComponentRef<typeof TextInput> | null>>>({});
 
   const showXY = fields !== 'radius';
   const showP2 = fields === 'segment';
@@ -239,20 +233,24 @@ export function CoordinateModal({
 
   // Видимые поля по порядку: «Далее» на клавиатуре переводит курсор в следующее,
   // а в последнем поле «Готово» — то же самое, что главная кнопка.
-  const order: InputRef[] = [];
-  if (showXY) order.push(xRef, yRef);
-  if (showP2) order.push(x2Ref, y2Ref);
-  if (showRadius) order.push(rRef);
-  if (showAngle) order.push(aRef);
-  if (showAngle2) order.push(a2Ref);
+  const order = useMemo<FieldKey[]>(() => {
+    const list: FieldKey[] = [];
+    if (showXY) list.push('x', 'y');
+    if (showP2) list.push('x2', 'y2');
+    if (showRadius) list.push('r');
+    if (showAngle) list.push('a');
+    if (showAngle2) list.push('a2');
+    return list;
+  }, [showXY, showP2, showRadius, showAngle, showAngle2]);
 
   // Окно появилось: сбрасываем старые ошибки и ставим курсор в первое поле.
-  const handleShow = () => {
+  const handleShow = useCallback(() => {
     typedRef.current = {};
     setError(null);
     setTriedSubmit(false);
-    order[0]?.current?.focus();
-  };
+    const first = order[0];
+    if (first) inputNodes.current[first]?.focus();
+  }, [order]);
 
   // Окно осталось открытым, но сменился шаг (например, «Отрезок: начало» → «Отрезок: конец»):
   // готовим поля к вводу следующей точки так же, как при новом открытии.
@@ -260,7 +258,7 @@ export function CoordinateModal({
   useEffect(() => {
     if (visible && prevTitleRef.current !== title) handleShow();
     prevTitleRef.current = title;
-  }, [visible, title]);
+  }, [visible, title, handleShow]);
 
   const handleCancel = () => {
     Keyboard.dismiss();
@@ -315,23 +313,19 @@ export function CoordinateModal({
   };
 
   /** Поле ввода числа. Кнопка «Далее» / «Готово» на клавиатуре зависит от места поля в order. */
-  const renderInput = (
-    ref: InputRef,
-    key: FieldKey,
-    value: string,
-    invalid: boolean,
-    placeholder?: string,
-  ) => {
-    const index = order.indexOf(ref);
+  const renderInput = (key: FieldKey, value: string, invalid: boolean, placeholder?: string) => {
+    const index = order.indexOf(key);
     const next = order[index + 1];
     return (
       <TextInput
-        ref={ref}
+        ref={(node) => {
+          inputNodes.current[key] = node;
+        }}
         value={value}
         onChangeText={(text) => handleChangeText(key, text)}
         keyboardType={KEYBOARD_TYPE}
         returnKeyType={next ? 'next' : 'done'}
-        onSubmitEditing={next ? () => next.current?.focus() : handleSubmit}
+        onSubmitEditing={next ? () => inputNodes.current[next]?.focus() : handleSubmit}
         submitBehavior={next ? 'submit' : undefined}
         selectTextOnFocus
         placeholder={placeholder}
@@ -359,7 +353,7 @@ export function CoordinateModal({
           {showXY && (
             <View style={styles.row}>
               <Text style={styles.label}>{xLabel}</Text>
-              {renderInput(xRef, 'x', xText, xInvalid)}
+              {renderInput('x', xText, xInvalid)}
               <Text style={styles.unit}>мм</Text>
             </View>
           )}
@@ -367,7 +361,7 @@ export function CoordinateModal({
           {showXY && (
             <View style={styles.row}>
               <Text style={styles.label}>{yLabel}</Text>
-              {renderInput(yRef, 'y', yText, yInvalid)}
+              {renderInput('y', yText, yInvalid)}
               <Text style={styles.unit}>мм</Text>
             </View>
           )}
@@ -375,7 +369,7 @@ export function CoordinateModal({
           {showP2 && (
             <View style={styles.row}>
               <Text style={styles.label}>X2</Text>
-              {renderInput(x2Ref, 'x2', x2Text, x2Invalid)}
+              {renderInput('x2', x2Text, x2Invalid)}
               <Text style={styles.unit}>мм</Text>
             </View>
           )}
@@ -383,7 +377,7 @@ export function CoordinateModal({
           {showP2 && (
             <View style={styles.row}>
               <Text style={styles.label}>Y2</Text>
-              {renderInput(y2Ref, 'y2', y2Text, y2Invalid)}
+              {renderInput('y2', y2Text, y2Invalid)}
               <Text style={styles.unit}>мм</Text>
             </View>
           )}
@@ -399,7 +393,6 @@ export function CoordinateModal({
                 <Text style={styles.toggleText}>{isDiameter ? 'D' : 'R'}</Text>
               </Pressable>
               {renderInput(
-                rRef,
                 'r',
                 rText,
                 rInvalid,
@@ -420,7 +413,7 @@ export function CoordinateModal({
           {showAngle && (
             <View style={styles.row}>
               <Text style={styles.label}>{angleLabel}</Text>
-              {renderInput(aRef, 'a', aText, aInvalid)}
+              {renderInput('a', aText, aInvalid)}
               <Text style={styles.unit}>°</Text>
             </View>
           )}
@@ -428,7 +421,7 @@ export function CoordinateModal({
           {showAngle2 && (
             <View style={styles.row}>
               <Text style={styles.label}>∠2</Text>
-              {renderInput(a2Ref, 'a2', a2Text, a2Invalid)}
+              {renderInput('a2', a2Text, a2Invalid)}
               <Text style={styles.unit}>°</Text>
             </View>
           )}
