@@ -34,7 +34,13 @@
           "imageWidth": 76
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-gradle-jvmargs",
+        {
+          "org.gradle.jvmargs": "-Xmx4g -XX:MaxMetaspaceSize=1024m"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
