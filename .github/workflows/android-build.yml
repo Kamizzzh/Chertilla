@@ -23,9 +23,9 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-37 build-tools;37.0.0 ndk;27.1.12297006'
+          packages: 'platforms;android-37.0 build-tools;37.0.0 ndk;27.1.12297006 platform-tools'
 
       - name: Cache Gradle and npm dependencies
         uses: actions/cache@v4
