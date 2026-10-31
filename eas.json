@@ -8,7 +8,9 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "ORG_GRADLE_PROJECT_reactNativeArchitectures": "arm64-v8a"
+        "ORG_GRADLE_PROJECT_reactNativeArchitectures": "arm64-v8a",
+        "EAS_USE_CACHE": "1",
+        "EAS_GRADLE_CACHE": "1"
       }
     },
     "preview": {
