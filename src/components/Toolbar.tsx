@@ -104,6 +104,10 @@ const CATEGORIES: Record<CategoryId, Category> = {
 
 const CATEGORY_ORDER: CategoryId[] = ['construction', 'analysis', 'editing'];
 const MENU_ANIMATION_MS = 180;
+const CATEGORY_BUTTON_HEIGHT = 56;
+const TOOLBAR_VERTICAL_PADDING = 8;
+const TOOLBAR_HEIGHT = CATEGORY_BUTTON_HEIGHT + TOOLBAR_VERTICAL_PADDING * 2;
+const SUBMENU_GAP = 8;
 
 type Props = {
   activeTool: Tool;
@@ -136,6 +140,7 @@ type ToolSubmenuProps = Pick<
   visible: boolean;
   left: number;
   right: number;
+  bottom: number;
   onClose: () => void;
 };
 
@@ -145,6 +150,7 @@ function ToolSubmenu({
   visible,
   left,
   right,
+  bottom,
   activeTool,
   onSelectTool,
   dimensionAxis,
@@ -165,7 +171,7 @@ function ToolSubmenu({
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: progress.value,
-    transform: [{ translateY: 12 * (1 - progress.value) }],
+    transform: [{ translateY: 20 * (1 - progress.value) }],
   }));
 
   const pressItem = (item: MenuItem) => {
@@ -187,55 +193,58 @@ function ToolSubmenu({
 
   return (
     <Animated.View
-      pointerEvents={visible ? 'auto' : 'none'}
+      pointerEvents="box-none"
       accessibilityElementsHidden={!visible}
       importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
-      style={[styles.submenu, { left, right }, animatedStyle]}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.submenuContent}>
-        {category.items.map((item) => {
-          const active =
-            item.kind === 'tool' &&
-            item.tool === activeTool &&
-            (item.tool !== 'dimension' || item.axis === dimensionAxis);
-          const disabled =
-            (item.kind === 'action' && item.id === 'copy' && !canCopy) ||
-            (item.kind === 'action' && item.id === 'delete' && !canDelete);
-          const danger = item.kind === 'action' && item.id === 'delete';
-          const iconColor = active
-            ? colors.onPrimary
-            : disabled
-              ? colors.disabledText
-              : danger
-                ? colors.danger
-                : colors.textSecondary;
+      style={[styles.submenu, { left, right, bottom }, animatedStyle]}>
+      <View pointerEvents={visible ? 'auto' : 'none'} style={styles.submenuPanel}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.submenuContent}>
+          {category.items.map((item) => {
+            const active =
+              item.kind === 'tool' &&
+              item.tool === activeTool &&
+              (item.tool !== 'dimension' || item.axis === dimensionAxis);
+            const disabled =
+              (item.kind === 'action' && item.id === 'copy' && !canCopy) ||
+              (item.kind === 'action' && item.id === 'delete' && !canDelete);
+            const danger = item.kind === 'action' && item.id === 'delete';
+            const iconColor = active
+              ? colors.accent
+              : disabled
+                ? colors.disabledText
+                : danger
+                  ? colors.danger
+                  : colors.textSecondary;
 
-          return (
-            <Pressable
-              key={item.id}
-              onPress={() => pressItem(item)}
-              disabled={disabled}
-              accessibilityRole="button"
-              accessibilityLabel={item.label}
-              accessibilityState={{ disabled, selected: active }}
-              style={({ pressed }) => [
-                styles.toolButton,
-                active && styles.buttonActive,
-                danger && !disabled && styles.deleteButton,
-                pressed && !active && !disabled && styles.buttonPressed,
-                disabled && styles.buttonDisabled,
-              ]}>
-              <MaterialCommunityIcons name={item.icon} size={25} color={iconColor} />
-              <Text style={[styles.toolButtonText, { color: iconColor }]} numberOfLines={2}>
-                {item.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => pressItem(item)}
+                disabled={disabled}
+                accessibilityRole="button"
+                accessibilityLabel={item.label}
+                accessibilityState={{ disabled, selected: active }}
+                style={({ pressed }) => [
+                  styles.toolButton,
+                  active && styles.toolButtonActive,
+                  danger && !disabled && styles.deleteButton,
+                  pressed && !active && !disabled && styles.buttonPressed,
+                  disabled && styles.buttonDisabled,
+                ]}>
+                <MaterialCommunityIcons name={item.icon} size={24} color={iconColor} />
+                <Text style={[styles.toolButtonText, { color: iconColor }]} numberOfLines={1}>
+                  {item.label}
+                </Text>
+                {active && <View style={styles.toolActiveIndicator} />}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
     </Animated.View>
   );
 }
@@ -261,21 +270,25 @@ export function Toolbar({
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
-  const [openCategory, setOpenCategory] = useState<CategoryId | null>(null);
-  const [menuCategory, setMenuCategory] = useState<CategoryId>('construction');
+  // Единственный идентификатор открытого меню: две панели одновременно показаться не могут.
+  const [activeCategory, setActiveCategory] = useState<CategoryId | null>(null);
+  // Последняя категория нужна только на 180 мс обратной анимации закрытия.
+  const [displayedCategory, setDisplayedCategory] = useState<CategoryId>('construction');
 
   const toggleCategory = (id: CategoryId) => {
-    setMenuCategory(id);
-    setOpenCategory((current) => (current === id ? null : id));
+    setDisplayedCategory(id);
+    setActiveCategory((current) => (current === id ? null : id));
   };
 
   return (
-    <View style={[styles.bar, { paddingBottom: insets.bottom + 8 }]}>
+    <View
+      style={[styles.bar, { paddingBottom: insets.bottom + TOOLBAR_VERTICAL_PADDING }]}>
       <ToolSubmenu
-        category={CATEGORIES[menuCategory]}
-        visible={openCategory !== null}
+        category={CATEGORIES[displayedCategory]}
+        visible={activeCategory !== null}
         left={insets.left + 12}
         right={insets.right + 12}
+        bottom={TOOLBAR_HEIGHT + SUBMENU_GAP + insets.bottom}
         activeTool={activeTool}
         onSelectTool={onSelectTool}
         dimensionAxis={dimensionAxis}
@@ -284,7 +297,7 @@ export function Toolbar({
         onCopy={onCopy}
         canDelete={canDelete}
         onDelete={onDelete}
-        onClose={() => setOpenCategory(null)}
+        onClose={() => setActiveCategory(null)}
       />
 
       <ScrollView
@@ -297,12 +310,15 @@ export function Toolbar({
         ]}>
         {CATEGORY_ORDER.map((id) => {
           const category = CATEGORIES[id];
-          const expanded = openCategory === id;
+          const expanded = activeCategory === id;
           const containsActiveTool = category.items.some(
             (item) => item.kind === 'tool' && item.tool === activeTool,
           );
-          const highlighted = expanded || containsActiveTool;
-          const color = highlighted ? colors.onPrimary : colors.textSecondary;
+          const color = expanded
+            ? colors.accent
+            : containsActiveTool
+              ? colors.accentText
+              : colors.textSecondary;
 
           return (
             <Pressable
@@ -313,8 +329,9 @@ export function Toolbar({
               accessibilityState={{ expanded, selected: containsActiveTool }}
               style={({ pressed }) => [
                 styles.categoryButton,
-                highlighted && styles.buttonActive,
-                pressed && !highlighted && styles.buttonPressed,
+                containsActiveTool && styles.categoryContainsTool,
+                expanded && styles.categoryExpanded,
+                pressed && !expanded && styles.buttonPressed,
               ]}>
               <MaterialCommunityIcons name={category.icon} size={22} color={color} />
               <Text style={[styles.categoryButtonText, { color }]} numberOfLines={1}>
@@ -325,6 +342,7 @@ export function Toolbar({
                 size={16}
                 color={color}
               />
+              {expanded && <View style={styles.categoryIndicator} />}
             </Pressable>
           );
         })}
@@ -387,8 +405,9 @@ export function Toolbar({
 const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     bar: {
-      zIndex: 20,
-      paddingTop: 8,
+      zIndex: 100,
+      elevation: 10,
+      paddingTop: TOOLBAR_VERTICAL_PADDING,
       backgroundColor: colors.background,
       borderTopWidth: 1,
       borderTopColor: colors.borderSubtle,
@@ -400,7 +419,7 @@ const createStyles = (colors: ThemeColors) =>
       gap: 8,
     },
     categoryButton: {
-      minHeight: 54,
+      height: CATEGORY_BUTTON_HEIGHT,
       paddingHorizontal: 11,
       paddingVertical: 8,
       borderRadius: 8,
@@ -412,13 +431,29 @@ const createStyles = (colors: ThemeColors) =>
       borderWidth: 1,
       borderColor: colors.border,
     },
+    categoryContainsTool: {
+      borderColor: colors.accent,
+    },
+    categoryExpanded: {
+      backgroundColor: colors.accentSurface,
+      borderColor: colors.accent,
+    },
+    categoryIndicator: {
+      position: 'absolute',
+      bottom: 3,
+      left: 16,
+      right: 16,
+      height: 3,
+      borderRadius: 2,
+      backgroundColor: colors.accent,
+    },
     categoryButtonText: {
       fontSize: 12,
       fontWeight: '700',
     },
     globalButton: {
       minWidth: 62,
-      minHeight: 54,
+      height: CATEGORY_BUTTON_HEIGHT,
       paddingHorizontal: 9,
       paddingVertical: 6,
       borderRadius: 8,
@@ -442,36 +477,55 @@ const createStyles = (colors: ThemeColors) =>
     },
     submenu: {
       position: 'absolute',
-      bottom: '100%',
-      marginBottom: 8,
+      zIndex: 1000,
+      elevation: 20,
+      overflow: 'visible',
+      backgroundColor: 'transparent',
+    },
+    submenuPanel: {
       borderRadius: 12,
+      paddingHorizontal: 8,
+      paddingVertical: 8,
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
       shadowColor: colors.shadow,
-      shadowOpacity: 0.25,
+      shadowOpacity: 0.28,
       shadowRadius: 12,
       shadowOffset: { width: 0, height: -2 },
-      elevation: 12,
+      elevation: 8,
     },
     submenuContent: {
       flexDirection: 'row',
-      alignItems: 'stretch',
-      gap: 6,
-      padding: 6,
+      alignItems: 'center',
+      gap: 8,
     },
     toolButton: {
-      width: 76,
-      minHeight: 64,
+      width: 64,
+      height: 64,
+      flexShrink: 0,
       paddingHorizontal: 4,
-      paddingVertical: 7,
+      paddingVertical: 4,
       borderRadius: 8,
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 4,
+      gap: 2,
       backgroundColor: colors.background,
       borderWidth: 1,
       borderColor: colors.borderSubtle,
+    },
+    toolButtonActive: {
+      backgroundColor: colors.accentSurface,
+      borderColor: colors.accent,
+    },
+    toolActiveIndicator: {
+      position: 'absolute',
+      bottom: 3,
+      left: 12,
+      right: 12,
+      height: 2,
+      borderRadius: 1,
+      backgroundColor: colors.accent,
     },
     toolButtonText: {
       fontSize: 10,
