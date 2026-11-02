@@ -126,7 +126,12 @@ export default function MenuScreen() {
       ]}>
       <View style={styles.header}>
         <Text style={styles.title}>Чертила</Text>
-        <Text style={styles.version}>v{APP_VERSION}</Text>
+        <Pressable
+          onLongPress={() => {
+            throw new Error('TEST CRASH: Проверка работы Telegram-логгера');
+          }}>
+          <Text style={styles.version}>v{APP_VERSION}</Text>
+        </Pressable>
       </View>
 
       <View style={styles.actions}>
