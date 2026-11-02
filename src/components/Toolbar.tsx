@@ -31,6 +31,9 @@ type Props = {
   onToggleSnapToGrid: () => void;
   isOrthoEnabled: boolean;
   onToggleOrtho: () => void;
+  /** Копировать можно ровно одну выделенную фигуру при активном инструменте «Выделить». */
+  canCopy: boolean;
+  onCopy: () => void;
 };
 
 /**
@@ -44,6 +47,8 @@ export function Toolbar({
   onToggleSnapToGrid,
   isOrthoEnabled,
   onToggleOrtho,
+  canCopy,
+  onCopy,
 }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -83,6 +88,19 @@ export function Toolbar({
           ]}>
           <Text style={[styles.buttonText, snapToGrid && styles.buttonTextActive]} numberOfLines={1}>
             ▦ Сетка
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={onCopy}
+          disabled={!canCopy}
+          accessibilityLabel="Копировать выделенную фигуру"
+          style={({ pressed }) => [
+            styles.button,
+            !canCopy && styles.buttonDisabled,
+            pressed && canCopy && styles.buttonPressed,
+          ]}>
+          <Text style={styles.buttonText} numberOfLines={1}>
+            ⧉ Копировать
           </Text>
         </Pressable>
         {BUTTONS.map(({ tool, label }) => {
@@ -132,6 +150,9 @@ const createStyles = (colors: ThemeColors) =>
     },
     buttonPressed: {
       backgroundColor: colors.surfaceSecondary,
+    },
+    buttonDisabled: {
+      opacity: 0.45,
     },
     buttonActive: {
       backgroundColor: colors.primary,

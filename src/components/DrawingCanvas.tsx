@@ -52,6 +52,7 @@ import {
 import { hitTest, shapesInRect } from '@/utils/hitTest';
 import { canIntersect } from '@/utils/intersection';
 import { findSnapPoint, type SnapResult } from '@/utils/snap';
+import { translateShape } from '@/utils/shapeTransform';
 import {
   clampScale,
   gridStepMm,
@@ -132,6 +133,8 @@ const HIGHLIGHT_EXTRA_PX = 2;
 // Допуск поиска фигуры под пальцем при выделении, px экрана.
 // Больше, чем толщина линии: палец закрывает несколько пикселей вокруг точки касания.
 const HIT_TOLERANCE_PX = 12;
+// Небольшой порог отличает перемещение фигуры от тапа и долгого нажатия для рамки.
+const MOVE_START_DISTANCE_PX = 2;
 // Толщина обводки рамки выделения, px.
 const MARQUEE_STROKE_PX = 1.5;
 // Маркер первого угла рамки (выделение в два тапа): длина лучей крестика и радиус кружка, px.
@@ -251,9 +254,9 @@ type Props = {
    */
   onMarqueePendingChange: (pending: boolean) => void;
   /**
-   * Фигуру изменили, потянув за рукоятку, и отпустили палец. Новая фигура — с тем же id,
-   * координаты округлены до 0.001 мм, угол прямой приведён к [0°, 180°).
-   * Вызывается, только если фигура действительно изменилась.
+   * Фигуру изменили перетаскиванием за рукоятку или целиком и отпустили палец.
+   * Новая фигура — с тем же id, координаты округлены до 0.001 мм.
+   * Вызывается один раз в конце жеста и только если фигура действительно изменилась.
    */
   onUpdateShape: (shape: Shape) => void;
   /** Точки, которые инструмент «Пересечение» показывает яркими кружками (мм чертежа). */
@@ -1145,6 +1148,13 @@ export function DrawingCanvas({
   // Точка привязки к объекту под рукояткой (мм), пока тянут. null — привязки нет.
   const dragSnap = useSharedValue<Point | null>(null);
 
+  // Перемещение выделенной фигуры целиком. Во время жеста меняются только эти
+  // shared values: React не перерисовывается, а синяя сцена одной фигуры следует за пальцем.
+  const moveOrigin = useSharedValue<Shape | null>(null);
+  const moveOffset = useSharedValue<Point>({ x: 0, y: 0 });
+  // true, пока палец на экране. После успешного конца жеста положение держим до нового списка shapes.
+  const moveActive = useSharedValue(false);
+
   // Зелёный квадратик привязки к объекту (px экрана).
   const dragSnapMarker = useDerivedValue(() => {
     const sp = dragSnap.get();
@@ -1165,7 +1175,11 @@ export function DrawingCanvas({
       dragShape.set(null);
       dragOrigin.set(null);
     }
-  }, [shapes, shapesSV, dragOrigin, dragShape, grab]);
+    if (moveOrigin.get() && !moveActive.get()) {
+      moveOrigin.set(null);
+      moveOffset.set({ x: 0, y: 0 });
+    }
+  }, [shapes, shapesSV, dragOrigin, dragShape, grab, moveOrigin, moveActive, moveOffset]);
 
   useEffect(() => {
     selectedSV.set(selectedShapes);
@@ -1197,12 +1211,15 @@ export function DrawingCanvas({
   // --- Фигуры в мм чертежа ---
   // Отсечение невидимого: в сцену попадают только фигуры, задевающие область покрытия.
   // Пересчитывается только при смене покрытия или списка фигур, а не на каждом кадре.
-  // Фигуру, которую тянут за рукоятку, основная сцена не рисует — её рисует сцена выделения
-  // в новом положении. Сцена перезаписывается только в начале и в конце перетаскивания.
+  // Фигуру, которую тянут за рукоятку или целиком, основная сцена не рисует —
+  // её рисует сцена выделения в новом положении. Перезапись только в начале и конце жеста.
   const visibleShapes = useDerivedValue(() => {
     const all = shapesSV.get();
     const dragging = dragOrigin.get();
-    const list = dragging ? all.filter((s) => s.id !== dragging.id) : all;
+    const moving = moveOrigin.get();
+    const list = all.filter(
+      (s) => (!dragging || s.id !== dragging.id) && (!moving || s.id !== moving.id),
+    );
     return getVisibleShapes(list, cover.get());
   });
 
@@ -1227,11 +1244,14 @@ export function DrawingCanvas({
 
   // Отдельная сцена для выделенных фигур: синие и толще, рисуются поверх основной.
   // Основную сцену при выделении перезаписывать не нужно.
-  // Фигуру, которую тянут за рукоятку, рисуем в текущем положении (dragShape):
-  // сцена из одной фигуры перезаписывается на каждом кадре перетаскивания — это быстро.
+  // Перетаскиваемую фигуру рисуем в текущем положении. При движении целиком новые
+  // координаты получаются из moveOrigin + moveOffset прямо на UI-потоке, без React.
   const selectionPicture = useDerivedValue(() => {
     try {
-      const live = dragShape.get();
+      const dragged = dragShape.get();
+      const moving = moveOrigin.get();
+      const offset = moveOffset.get();
+      const live = dragged ?? (moving ? translateShape(moving, offset.x, offset.y) : null);
       const selected = selectedSV.get();
       const list = live ? selected.map((s) => (s.id === live.id ? live : s)) : selected;
       return recordShapes(
@@ -1728,6 +1748,14 @@ export function DrawingCanvas({
     if (dragOrigin.get()) dragOrigin.set(null);
   };
 
+  // Отмена перемещения целиком: фигура сразу возвращается в исходную точку.
+  const clearMove = () => {
+    'worklet';
+    moveActive.set(false);
+    moveOrigin.set(null);
+    moveOffset.set({ x: 0, y: 0 });
+  };
+
   // Какая рукоятка под пальцем (x, y — px экрана): номер ближайшей в пределах HANDLE_HIT_PX
   // или -1, если ни одной рядом нет. Ближайшая — потому что при сильном отдалении
   // рукоятки отрезка или окружности могут оказаться почти в одной точке.
@@ -1837,12 +1865,63 @@ export function DrawingCanvas({
       if (grab.get()) clearDrag();
     });
 
-  // Рукоятки важнее остальных жестов (Exclusive): пан, щипок, тап и рамка ждут, пока
-  // handleDrag не откажется. Мимо рукоятки он отказывается сразу при касании, поэтому
-  // задержки нет; на рукоятке — включается, и пан холста не начинается вовсе.
+  // Перемещение единственной выделенной фигуры за её линию (не за рукоятку).
+  // Касание в другом месте сразу отдаётся рамке, а второй палец отменяет перемещение
+  // и позволяет обычным жестам пана/зума работать без конфликта.
+  const shapeMove = Gesture.Pan()
+    .enabled(selectTool && !dragMode && selectedShapes.length === 1)
+    .minDistance(MOVE_START_DISTANCE_PX)
+    .maxPointers(1)
+    .onTouchesDown((e, manager) => {
+      if (moveActive.get() || moveOrigin.get()) clearMove();
+      const selected = selectedSV.get();
+      const t = e.changedTouches[0];
+      if (selected.length !== 1 || !t || e.numberOfTouches > 1) {
+        manager.fail();
+        return;
+      }
+      const vp = viewport.get();
+      const world = screenToWorld(vp, { x: t.x, y: t.y });
+      const hit = hitTest(selected, world, HIT_TOLERANCE_PX / safeK(vp));
+      if (!hit) {
+        manager.fail();
+        return;
+      }
+      moveOrigin.set(selected[0]);
+      moveOffset.set({ x: 0, y: 0 });
+      moveActive.set(true);
+    })
+    .onUpdate((e) => {
+      if (!moveActive.get() || !moveOrigin.get()) return;
+      const kk = safeK(viewport.get());
+      // Экранная ось Y направлена вниз, поэтому для чертежа знак дельты обратный.
+      moveOffset.set({ x: e.translationX / kk, y: -e.translationY / kk });
+    })
+    .onEnd((_e, success) => {
+      const origin = moveOrigin.get();
+      const offset = moveOffset.get();
+      if (!success || !origin) {
+        clearMove();
+        return;
+      }
+      const finished = translateShape(origin, offset.x, offset.y);
+      if (JSON.stringify(finished) === JSON.stringify(origin)) {
+        clearMove();
+        return;
+      }
+      // История меняется только здесь: всё перемещение — один шаг «Отменить».
+      moveActive.set(false);
+      scheduleOnRN(onUpdateShape, finished);
+    })
+    .onFinalize(() => {
+      if (moveActive.get()) clearMove();
+    });
+
+  // Рукоятки важнее остальных жестов. Перемещение и рамка соревнуются через Race:
+  // сдвиг сразу начинает Move, а неподвижное долгое нажатие по-прежнему начинает рамку.
   const gesture = Gesture.Exclusive(
     handleDrag,
-    Gesture.Simultaneous(pan, pinch, tap, loupe, marqueeGesture),
+    Gesture.Simultaneous(pan, pinch, tap, loupe, Gesture.Race(shapeMove, marqueeGesture)),
   );
 
   const onLayout = (e: LayoutChangeEvent) => {

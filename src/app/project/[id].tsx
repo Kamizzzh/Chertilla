@@ -27,6 +27,7 @@ import { divideShape, getArcFrom3Points, roundAngle } from '@/utils/geometry';
 import { computeIntersection } from '@/utils/intersection';
 import { parseNumber } from '@/utils/number';
 import { shareDrawing, type ExportFormat } from '@/utils/shareExport';
+import { translateShape } from '@/utils/shapeTransform';
 import { getProject, loadProject, saveProject } from '@/utils/storage';
 import { roundMm, type Point } from '@/utils/viewport';
 
@@ -80,6 +81,8 @@ const SHAPE_NAMES: Record<Shape['type'], string> = {
 // Размерная линия нового размера стоит на таком расстоянии от измеряемых точек, мм.
 // Потом её можно сдвинуть рукояткой.
 const DEFAULT_DIMENSION_OFFSET_MM = 10;
+// Дубликат смещается по обеим осям, чтобы не лежать точно поверх исходной фигуры.
+const COPY_OFFSET_MM = 10;
 
 /** Какие поля показать в окне «Изменить» и чем их заполнить — по типу фигуры. */
 function getEditFields(shape: Shape): { fields: CoordinateFields; initial: CoordinateInitial } {
@@ -330,6 +333,18 @@ export default function ProjectScreen() {
     // Один шаг истории на все фигуры: одно «Отменить» вернёт их все.
     deleteShapes(selectedShapes.map((s) => s.id));
     selectShapes([]);
+  };
+
+  // Копия добавляется одним шагом истории и сразу становится единственной выделенной фигурой.
+  const handleCopySelected = () => {
+    if (tool !== 'select' || selectedCount !== 1) return;
+    const source = selectedShapes[0];
+    const copy = {
+      ...translateShape(source, COPY_OFFSET_MM, COPY_OFFSET_MM),
+      id: makeId(),
+    };
+    addShape(copy);
+    selectShapes([copy.id]);
   };
 
   // «Рукоятки» и «Ввод ⌨» — только для одной фигуры, сразу, без промежуточных вопросов.
@@ -992,6 +1007,8 @@ export default function ProjectScreen() {
         onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}
         isOrthoEnabled={isOrthoEnabled}
         onToggleOrtho={() => setIsOrthoEnabled((v) => !v)}
+        canCopy={tool === 'select' && selectedCount === 1}
+        onCopy={handleCopySelected}
       />
 
       {/* Плавающие кнопки рисуются последними, чтобы быть поверх панели и холста.
