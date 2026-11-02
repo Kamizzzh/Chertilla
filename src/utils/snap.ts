@@ -7,11 +7,12 @@ import type { Shape } from '@/types/shapes';
 import {
   arcEndpoints,
   arcMidAngle,
+  dimensionBox,
   nearestOnArc,
   pointAtAngle,
   rectCorners,
 } from '@/utils/geometry';
-import type { Point } from '@/utils/viewport';
+import { roundMm, type Point } from '@/utils/viewport';
 
 /**
  * Вид привязки:
@@ -36,6 +37,75 @@ export type SnapResult = {
   kind: SnapKind;
   shapeId: string; // фигура, к которой привязались (её подсвечиваем)
 };
+
+/** Габаритный прямоугольник фигуры в мм. У бесконечной прямой все границы бесконечны. */
+export type BBox = { minX: number; minY: number; maxX: number; maxY: number };
+
+// Компенсирует округление границ до 0.001 мм, чтобы префильтр не отрезал пограничные привязки.
+const BBOX_EPSILON_MM = 1e-3;
+
+/** Консервативный габарит фигуры: включает и геометрию, и все её характерные точки. */
+export function getShapeBBox(shape: Shape): BBox {
+  'worklet';
+  if (shape.type === 'xline') {
+    return { minX: -Infinity, minY: -Infinity, maxX: Infinity, maxY: Infinity };
+  }
+
+  let minX: number;
+  let minY: number;
+  let maxX: number;
+  let maxY: number;
+  if (shape.type === 'point') {
+    minX = shape.p.x;
+    maxX = shape.p.x;
+    minY = shape.p.y;
+    maxY = shape.p.y;
+  } else if (shape.type === 'segment') {
+    minX = Math.min(shape.start.x, shape.end.x);
+    maxX = Math.max(shape.start.x, shape.end.x);
+    minY = Math.min(shape.start.y, shape.end.y);
+    maxY = Math.max(shape.start.y, shape.end.y);
+  } else if (shape.type === 'circle' || shape.type === 'arc') {
+    // Для дуги берём габарит всей окружности: центр тоже является точкой привязки.
+    minX = shape.center.x - shape.radius;
+    maxX = shape.center.x + shape.radius;
+    minY = shape.center.y - shape.radius;
+    maxY = shape.center.y + shape.radius;
+  } else if (shape.type === 'rect') {
+    minX = Math.min(shape.p1.x, shape.p2.x);
+    maxX = Math.max(shape.p1.x, shape.p2.x);
+    minY = Math.min(shape.p1.y, shape.p2.y);
+    maxY = Math.max(shape.p1.y, shape.p2.y);
+  } else {
+    const box = dimensionBox(shape);
+    minX = box.x0;
+    maxX = box.x1;
+    minY = box.y0;
+    maxY = box.y1;
+  }
+  return {
+    minX: roundMm(minX),
+    minY: roundMm(minY),
+    maxX: roundMm(maxX),
+    maxY: roundMm(maxY),
+  };
+}
+
+/** Пересекается ли габарит, расширенный на 0.001 мм, с кругом радиуса radius. */
+export function bboxOverlapsCircle(bbox: BBox, point: Point, radius: number): boolean {
+  'worklet';
+  const closestX = Math.max(
+    bbox.minX - BBOX_EPSILON_MM,
+    Math.min(bbox.maxX + BBOX_EPSILON_MM, point.x),
+  );
+  const closestY = Math.max(
+    bbox.minY - BBOX_EPSILON_MM,
+    Math.min(bbox.maxY + BBOX_EPSILON_MM, point.y),
+  );
+  const dx = point.x - closestX;
+  const dy = point.y - closestY;
+  return dx * dx + dy * dy <= radius * radius;
+}
 
 function dist(a: Point, b: Point): number {
   'worklet';
@@ -152,8 +222,18 @@ export function findSnapPoint(shapes: Shape[], p: Point, tolerance: number): Sna
     }
   };
 
-  // 1. Характерные точки.
+  // Дешёвый префильтр: дорогую геометрию считаем только для фигур рядом с пальцем.
+  // Размеры в привязке не участвуют, а бесконечные прямые нельзя отсекать габаритом.
+  const candidates: Shape[] = [];
   for (const s of shapes) {
+    if (s.type === 'dimension') continue;
+    if (s.type === 'xline' || bboxOverlapsCircle(getShapeBBox(s), p, tolerance)) {
+      candidates.push(s);
+    }
+  }
+
+  // 1. Характерные точки.
+  for (const s of candidates) {
     if (s.type === 'point') {
       consider(s.p, 'point', s.id);
     } else if (s.type === 'segment') {
@@ -197,7 +277,7 @@ export function findSnapPoint(shapes: Shape[], p: Point, tolerance: number): Sna
   const addSeg = (a: Point, b: Point, id: string) => {
     if (dist(p, projectOnSegment(p, a, b)) <= tolerance) nearSegs.push({ a, b, id });
   };
-  for (const s of shapes) {
+  for (const s of candidates) {
     if (s.type === 'segment') {
       addSeg(s.start, s.end, s.id);
     } else if (s.type === 'rect') {
@@ -231,7 +311,7 @@ export function findSnapPoint(shapes: Shape[], p: Point, tolerance: number): Sna
   if (best) return best;
 
   // 2. Ближайшая точка на линии или окружности.
-  for (const s of shapes) {
+  for (const s of candidates) {
     if (s.type === 'segment') {
       consider(projectOnSegment(p, s.start, s.end), 'nearest', s.id);
     } else if (s.type === 'circle') {
