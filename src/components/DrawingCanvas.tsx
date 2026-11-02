@@ -226,6 +226,8 @@ type Props = {
    * Включена — привязки к объектам при перетаскивании рукояток нет.
    */
   snapToGrid: boolean;
+  /** Орто-режим: отрезок и прямая по двум точкам строятся строго по осям X или Y. */
+  isOrthoEnabled: boolean;
   /**
    * Точка, поставленная пальцем: короткий тап или отпускание после долгого нажатия с лупой.
    * Координаты — в мм чертежа, округлены до 0.001. Не вызывается при инструменте «Выделение».
@@ -958,6 +960,17 @@ function loupeCenterPx(finger: Point, canvasWidth: number): Point {
   return { x, y };
 }
 
+/** Орто-режим: по большей дельте оставляем только горизонтальное или вертикальное движение. */
+function constrainOrthoPoint(start: Point, point: Point, enabled: boolean): Point {
+  'worklet';
+  if (!enabled) return point;
+  const dx = point.x - start.x;
+  const dy = point.y - start.y;
+  return Math.abs(dx) > Math.abs(dy)
+    ? { x: point.x, y: start.y }
+    : { x: start.x, y: point.y };
+}
+
 export function DrawingCanvas({
   ref,
   tool,
@@ -967,6 +980,7 @@ export function DrawingCanvas({
   selectedShapeIds,
   editMode,
   snapToGrid,
+  isOrthoEnabled,
   onTap,
   onSelectShapes,
   marqueeActive,
@@ -1011,6 +1025,14 @@ export function DrawingCanvas({
   useEffect(() => {
     snapToGridSV.set(snapToGrid);
   }, [snapToGrid, snapToGridSV]);
+  const isOrthoEnabledSV = useSharedValue(isOrthoEnabled);
+  useEffect(() => {
+    isOrthoEnabledSV.set(isOrthoEnabled);
+  }, [isOrthoEnabled, isOrthoEnabledSV]);
+  const pendingStartSV = useSharedValue<Point | null>(pendingStart);
+  useEffect(() => {
+    pendingStartSV.set(pendingStart);
+  }, [pendingStart, pendingStartSV]);
 
   // Состояние вида живёт в UI-потоке, чтобы пан и зум были плавными.
   const width = useSharedValue(0);
@@ -1304,15 +1326,20 @@ export function DrawingCanvas({
     }
   });
 
-  // Маркер привязки (в px экрана): квадрат — характерная точка
-  // (конец, центр и т.п.), ромб — точка на линии.
+  // Маркер привязки (в px экрана): треугольник — середина, квадрат — другая характерная точка
+  // (конец, центр и т.п.), ромб — ближайшая точка на линии.
   const snapMarker = useDerivedValue(() => {
     const t = touch.get();
     if (!t || !t.snap) return noPath;
     const path = Skia.PathBuilder.Make();
     const p = worldToScreen(viewport.get(), t.target);
     const h = SNAP_MARKER_HALF_PX;
-    if (t.snap.kind === 'nearest') {
+    if (t.snap.kind === 'midpoint') {
+      path.moveTo(p.x, p.y - h);
+      path.lineTo(p.x + h, p.y + h);
+      path.lineTo(p.x - h, p.y + h);
+      path.close();
+    } else if (t.snap.kind === 'nearest') {
       path.moveTo(p.x, p.y - h);
       path.lineTo(p.x + h, p.y);
       path.lineTo(p.x, p.y + h);
@@ -1579,9 +1606,13 @@ export function DrawingCanvas({
         onDivideTap(hitTest(dividable, world, HIT_TOLERANCE_PX / safeK(vp)));
         return;
       }
-      const point = snapToGrid
+      const rawPoint = snapToGrid
         ? { x: snapToGridMm(world.x), y: snapToGridMm(world.y) }
         : { x: roundMm(world.x), y: roundMm(world.y) };
+      const point =
+        pendingStart && (tool === 'segment' || tool === 'xline')
+          ? constrainOrthoPoint(pendingStart, rawPoint, isOrthoEnabled)
+          : rawPoint;
       if (tool === 'dimension' && !pendingStart) {
         // «Размер»: тап по отрезку измеряет весь отрезок (второго тапа не нужно).
         const segments = shapes.filter((s) => s.type === 'segment');
@@ -1596,7 +1627,12 @@ export function DrawingCanvas({
   const updateTouch = (x: number, y: number) => {
     'worklet';
     const vp = viewport.get();
-    const world = screenToWorld(vp, { x, y });
+    const rawWorld = screenToWorld(vp, { x, y });
+    const orthoStart = tool === 'segment' || tool === 'xline' ? pendingStartSV.get() : null;
+    const world = orthoStart
+      ? constrainOrthoPoint(orthoStart, rawWorld, isOrthoEnabledSV.get())
+      : rawWorld;
+    // Орто ограничивает точку ДО поиска привязки, чтобы оба режима работали с одной точкой.
     const snap = findSnapPoint(shapesSV.get(), world, SNAP_RADIUS_PX / pxPerMm(vp));
     // Нет привязки к объекту, но включена сетка — перекрестие встаёт в узел сетки.
     const gridWorld = snapToGridSV.get()

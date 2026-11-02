@@ -194,6 +194,8 @@ export default function ProjectScreen() {
   const [perfVisible, setPerfVisible] = useState(false);
   // Привязка к сетке (шаг 10 мм) для тапа, лупы и рукояток. По умолчанию выключена.
   const [snapToGrid, setSnapToGrid] = useState(false);
+  // Орто-режим: вторая точка отрезка или прямой даёт строго горизонтальную/вертикальную линию.
+  const [isOrthoEnabled, setIsOrthoEnabled] = useState(false);
 
   // Инструмент ждёт вторую точку (отрезок, окружность, прямоугольник, прямая «2 точки»).
   // Дуга ждёт ещё и третью — см. pendingMiddle.
@@ -764,6 +766,7 @@ export default function ProjectScreen() {
           selectedShapeIds={canvasSelectedIds}
           editMode={dragMode ? 'drag' : 'none'}
           snapToGrid={snapToGrid}
+          isOrthoEnabled={isOrthoEnabled}
           intersectMarkers={intersectMarkers}
           onIntersectTap={handleIntersectTap}
           onDivideTap={handleDivideTap}
@@ -987,6 +990,8 @@ export default function ProjectScreen() {
         onSelectTool={selectTool}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}
+        isOrthoEnabled={isOrthoEnabled}
+        onToggleOrtho={() => setIsOrthoEnabled((v) => !v)}
       />
 
       {/* Плавающие кнопки рисуются последними, чтобы быть поверх панели и холста.

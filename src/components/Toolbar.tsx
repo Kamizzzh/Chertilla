@@ -29,13 +29,22 @@ type Props = {
   onSelectTool: (tool: Tool) => void;
   snapToGrid: boolean;
   onToggleSnapToGrid: () => void;
+  isOrthoEnabled: boolean;
+  onToggleOrtho: () => void;
 };
 
 /**
  * Нижняя панель инструментов. Повторное нажатие на активный инструмент снимает выбор.
  * Кнопок больше, чем помещается на узком экране, поэтому панель прокручивается по горизонтали.
  */
-export function Toolbar({ activeTool, onSelectTool, snapToGrid, onToggleSnapToGrid }: Props) {
+export function Toolbar({
+  activeTool,
+  onSelectTool,
+  snapToGrid,
+  onToggleSnapToGrid,
+  isOrthoEnabled,
+  onToggleOrtho,
+}: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
@@ -50,6 +59,20 @@ export function Toolbar({ activeTool, onSelectTool, snapToGrid, onToggleSnapToGr
           styles.content,
           { paddingLeft: insets.left + 12, paddingRight: insets.right + 12 },
         ]}>
+        {/* Орто-режим — не инструмент, остаётся включённым при смене инструмента. */}
+        <Pressable
+          onPress={onToggleOrtho}
+          style={({ pressed }) => [
+            styles.button,
+            isOrthoEnabled && styles.buttonActive,
+            pressed && !isOrthoEnabled && styles.buttonPressed,
+          ]}>
+          <Text
+            style={[styles.buttonText, isOrthoEnabled && styles.buttonTextActive]}
+            numberOfLines={1}>
+            ∟ Орто
+          </Text>
+        </Pressable>
         {/* Переключатель привязки к сетке — не инструмент, остаётся включённым при смене инструмента. */}
         <Pressable
           onPress={onToggleSnapToGrid}

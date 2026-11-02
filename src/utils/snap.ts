@@ -240,7 +240,10 @@ export function findSnapPoint(shapes: Shape[], p: Point, tolerance: number): Sna
       consider(s.start, 'endpoint', s.id);
       consider(s.end, 'endpoint', s.id);
       consider(
-        { x: (s.start.x + s.end.x) / 2, y: (s.start.y + s.end.y) / 2 },
+        {
+          x: roundMm((s.start.x + s.end.x) / 2),
+          y: roundMm((s.start.y + s.end.y) / 2),
+        },
         'midpoint',
         s.id,
       );
