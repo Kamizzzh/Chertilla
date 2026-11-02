@@ -21,6 +21,7 @@ const BUTTONS: ToolButton[] = [
   { tool: 'xline', label: 'Прямая' },
   { tool: 'dimension', label: 'Размер' },
   { tool: 'intersect', label: 'Пересечение' },
+  { tool: 'divide', label: 'Разделить' },
 ];
 
 type Props = {

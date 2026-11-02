@@ -261,6 +261,8 @@ type Props = {
    * иначе shape — фигура под пальцем (отрезок, окружность, дуга, прямоугольник, прямая) или null.
    */
   onIntersectTap: (shape: Shape | null, markerIndex: number) => void;
+  /** Тап при инструменте «Разделить»: отрезок, окружность или дуга под пальцем (либо null). */
+  onDivideTap: (shape: Shape | null) => void;
 };
 
 /** Рамка выделения, px экрана: угол, где палец начал движение (x0, y0), и где он сейчас (x1, y1). */
@@ -972,10 +974,12 @@ export function DrawingCanvas({
   onUpdateShape,
   intersectMarkers,
   onIntersectTap,
+  onDivideTap,
 }: Props) {
   // Инструмент строит фигуры (точка, отрезок, окружность, прямая) — нужны лупа и привязка.
-  // «Пересечение» только выбирает фигуры и маркеры тапом — лупы нет.
-  const drawingTool = tool !== 'none' && tool !== 'select' && tool !== 'intersect';
+  // «Пересечение» и «Разделить» только выбирают фигуры тапом — лупы нет.
+  const drawingTool =
+    tool !== 'none' && tool !== 'select' && tool !== 'intersect' && tool !== 'divide';
   const selectTool = tool === 'select';
 
   // Выделенные фигуры. Тех, которых уже нет в чертеже (например, после «Отменить»),
@@ -1566,6 +1570,13 @@ export function DrawingCanvas({
           return;
         }
         onIntersectTap(hitTest(shapes.filter(canIntersect), world, tol), -1);
+        return;
+      }
+      if (tool === 'divide') {
+        const dividable = shapes.filter(
+          (s) => s.type === 'segment' || s.type === 'circle' || s.type === 'arc',
+        );
+        onDivideTap(hitTest(dividable, world, HIT_TOLERANCE_PX / safeK(vp)));
         return;
       }
       const point = snapToGrid

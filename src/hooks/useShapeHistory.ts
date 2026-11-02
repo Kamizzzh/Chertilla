@@ -19,6 +19,7 @@ type HistoryState = {
 
 type HistoryAction =
   | { type: 'add'; shape: Shape }
+  | { type: 'addMany'; shapes: Shape[] }
   | { type: 'delete'; ids: string[] }
   | { type: 'update'; id: string; shape: Shape }
   | { type: 'undo' }
@@ -39,6 +40,11 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
   switch (action.type) {
     case 'add':
       return commit(state, [...state.present, action.shape]);
+
+    case 'addMany':
+      // Группа новых фигур (например, точек команды «Разделить») — один шаг истории.
+      if (action.shapes.length === 0) return state;
+      return commit(state, [...state.present, ...action.shapes]);
 
     case 'delete': {
       // Удаление — один шаг истории, сколько бы фигур ни удалили:
@@ -106,6 +112,10 @@ export function useShapeHistory() {
   const [state, dispatch] = useReducer(historyReducer, INITIAL_STATE);
 
   const addShape = useCallback((shape: Shape) => dispatch({ type: 'add', shape }), []);
+  const addShapes = useCallback(
+    (newShapes: Shape[]) => dispatch({ type: 'addMany', shapes: newShapes }),
+    [],
+  );
   const deleteShapes = useCallback((ids: string[]) => dispatch({ type: 'delete', ids }), []);
   const updateShape = useCallback(
     (id: string, newShapeData: Shape) => dispatch({ type: 'update', id, shape: newShapeData }),
@@ -122,6 +132,7 @@ export function useShapeHistory() {
   return {
     shapes: state.present,
     addShape,
+    addShapes,
     deleteShapes,
     updateShape,
     undo,

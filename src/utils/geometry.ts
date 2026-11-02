@@ -5,7 +5,7 @@
 // и экран в JS-потоке. Вызываемая функция объявлена ВЫШЕ вызывающей — иначе в UI-потоке
 // она окажется undefined (см. CLAUDE.md).
 
-import type { ArcShape, DimensionShape } from '@/types/shapes';
+import type { ArcShape, DimensionShape, Shape } from '@/types/shapes';
 import { roundMm, type Point } from '@/utils/viewport';
 
 /** Параметры дуги без id и типа: центр, радиус, начальный и конечный углы. */
@@ -60,6 +60,47 @@ export function pointAtAngle(center: Point, radius: number, deg: number): Point 
   'worklet';
   const rad = (deg * Math.PI) / 180;
   return { x: center.x + Math.cos(rad) * radius, y: center.y + Math.sin(rad) * radius };
+}
+
+/**
+ * Равномерно делит отрезок, окружность или дугу на segments частей.
+ * Отрезок и дуга получают N−1 внутренних точек, окружность — N точек без повтора начала.
+ * Все координаты результата округлены до 0.001 мм. Неподдерживаемая фигура или N < 2 — [].
+ */
+export function divideShape(shape: Shape, segments: number): Point[] {
+  'worklet';
+  if (!Number.isInteger(segments) || segments < 2) return [];
+  const points: Point[] = [];
+
+  if (shape.type === 'segment') {
+    for (let i = 1; i < segments; i++) {
+      const t = i / segments;
+      points.push({
+        x: roundMm(shape.start.x + (shape.end.x - shape.start.x) * t),
+        y: roundMm(shape.start.y + (shape.end.y - shape.start.y) * t),
+      });
+    }
+    return points;
+  }
+
+  if (shape.type === 'circle') {
+    const angleStep = 360 / segments;
+    for (let i = 0; i < segments; i++) {
+      const p = pointAtAngle(shape.center, shape.radius, angleStep * i);
+      points.push({ x: roundMm(p.x), y: roundMm(p.y) });
+    }
+    return points;
+  }
+
+  if (shape.type === 'arc') {
+    // arcSweep учитывает переход через 0° и направление дуги против часовой стрелки.
+    const angleStep = arcSweep(shape.startAngle, shape.endAngle) / segments;
+    for (let i = 1; i < segments; i++) {
+      const p = pointAtAngle(shape.center, shape.radius, shape.startAngle + angleStep * i);
+      points.push({ x: roundMm(p.x), y: roundMm(p.y) });
+    }
+  }
+  return points;
 }
 
 /** Угол середины дуги. */

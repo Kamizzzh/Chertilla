@@ -11,6 +11,7 @@ import {
   type CoordinateInput,
 } from '@/components/CoordinateModal';
 import { DrawingCanvas, type DrawingCanvasHandle, type EditMode } from '@/components/DrawingCanvas';
+import { DivideModal } from '@/components/DivideModal';
 import { FLOATING_BUTTON_SIZE, FloatingButton } from '@/components/FloatingButton';
 import { PerfMonitor, PerfToggle } from '@/components/PerfMonitor';
 import { SelectionVignette } from '@/components/SelectionVignette';
@@ -22,7 +23,7 @@ import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import { useShapeHistory } from '@/hooks/useShapeHistory';
 import type { DimensionAxis, Shape, Tool, XLineMode } from '@/types/shapes';
-import { getArcFrom3Points, roundAngle } from '@/utils/geometry';
+import { divideShape, getArcFrom3Points, roundAngle } from '@/utils/geometry';
 import { computeIntersection } from '@/utils/intersection';
 import { parseNumber } from '@/utils/number';
 import { shareDrawing, type ExportFormat } from '@/utils/shareExport';
@@ -125,8 +126,18 @@ export default function ProjectScreen() {
 
   const [tool, setTool] = useState<Tool>('none');
   // Фигуры чертежа и история действий (Отменить / Вернуть).
-  const { shapes, addShape, deleteShapes, updateShape, undo, redo, setShapes, canUndo, canRedo } =
-    useShapeHistory();
+  const {
+    shapes,
+    addShape,
+    addShapes,
+    deleteShapes,
+    updateShape,
+    undo,
+    redo,
+    setShapes,
+    canUndo,
+    canRedo,
+  } = useShapeHistory();
 
   // id выделенных фигур (инструмент «Выделение»). Пустой массив — ничего не выделено.
   const [selectedShapeIds, setSelectedShapeIds] = useState<string[]>([]);
@@ -193,7 +204,8 @@ export default function ProjectScreen() {
     tool === 'dimension' ||
     (tool === 'xline' && xlineMode === 'twoPoints');
   // Инструмент строит фигуры (нужна кнопка «Ввод» координат).
-  const drawingTool = tool !== 'none' && tool !== 'select' && tool !== 'intersect';
+  const drawingTool =
+    tool !== 'none' && tool !== 'select' && tool !== 'intersect' && tool !== 'divide';
 
   // Инструмент «Пересечение»: id выбранных тапом фигур (0, 1 или 2).
   const [intersectIds, setIntersectIds] = useState<string[]>([]);
@@ -216,14 +228,27 @@ export default function ProjectScreen() {
     [intersection],
   );
   const intersectMarkers = useMemo(() => markerOptions.map((o) => o.p), [markerOptions]);
+
+  // Инструмент «Разделить»: выбранная фигура и окно ввода количества сегментов.
+  const [divideTargetId, setDivideTargetId] = useState<string | null>(null);
+  const [divideModalVisible, setDivideModalVisible] = useState(false);
+  const divideTarget = shapes.find((s) => s.id === divideTargetId) ?? null;
+
   // Выбранные фигуры подсвечиваются тем же синим, что и выделение.
-  const canvasSelectedIds = tool === 'intersect' ? intersectPair.map((s) => s.id) : selectedShapeIds;
+  const canvasSelectedIds =
+    tool === 'intersect'
+      ? intersectPair.map((s) => s.id)
+      : tool === 'divide' && divideTarget
+        ? [divideTarget.id]
+        : selectedShapeIds;
 
   /** Убирает недостроенную фигуру (все уже поставленные её точки). */
   const clearPending = () => {
     setPendingStart(null);
     setPendingMiddle(null);
     setIntersectIds([]);
+    setDivideTargetId(null);
+    setDivideModalVisible(false);
   };
 
   /** Создаёт обычную точку в выбранном месте пересечения и начинает выбор заново. */
@@ -250,6 +275,38 @@ export default function ProjectScreen() {
     }
     // Нет выбранных или уже выбрана пара — начинаем новую пару.
     setIntersectIds([shape.id]);
+  };
+
+  const handleDivideTap = (shape: Shape | null) => {
+    if (!shape) {
+      setDivideTargetId(null);
+      return;
+    }
+    setDivideTargetId(shape.id);
+    setDivideModalVisible(true);
+  };
+
+  const closeDivideModal = () => {
+    setDivideModalVisible(false);
+    setDivideTargetId(null);
+  };
+
+  const handleDivideSubmit = (segments: number): string | null => {
+    if (
+      !divideTarget ||
+      (divideTarget.type !== 'segment' &&
+        divideTarget.type !== 'circle' &&
+        divideTarget.type !== 'arc')
+    ) {
+      return 'Выбранная фигура больше недоступна';
+    }
+    const points = divideShape(divideTarget, segments);
+    if (points.length === 0) return 'Не удалось разделить фигуру';
+
+    // Все точки добавляются одним действием: одно «Отменить» удалит всю группу.
+    addShapes(points.map((p) => ({ id: makeId(), type: 'point' as const, p })));
+    closeDivideModal();
+    return null;
   };
 
   /** Новое выделение. Режим перетаскивания рукояток при этом всегда выключается. */
@@ -407,6 +464,8 @@ export default function ProjectScreen() {
       setPendingStart(null);
       setPendingMiddle(null);
       setIntersectIds([]);
+      setDivideTargetId(null);
+      setDivideModalVisible(false);
       setSelectedShapeIds([]);
       setEditMode('none');
       setShapes(list); // заодно очищает историю: «Отменить» не откатит загрузку
@@ -707,6 +766,7 @@ export default function ProjectScreen() {
           snapToGrid={snapToGrid}
           intersectMarkers={intersectMarkers}
           onIntersectTap={handleIntersectTap}
+          onDivideTap={handleDivideTap}
           onTap={handleTap}
           onSelectShapes={selectShapes}
           marqueeActive={marqueeActive}
@@ -769,6 +829,15 @@ export default function ProjectScreen() {
                   <Text style={styles.actionButtonText}>Отмена</Text>
                 </Pressable>
               </View>
+            </View>
+          )}
+
+          {/* Инструмент «Разделить»: выбор фигуры, затем число сегментов в отдельном окне. */}
+          {tool === 'divide' && !divideModalVisible && (
+            <View style={styles.actionPanel}>
+              <Text style={styles.actionTitle} numberOfLines={2}>
+                Разделить: коснитесь отрезка, окружности или дуги
+              </Text>
             </View>
           )}
 
@@ -936,6 +1005,13 @@ export default function ProjectScreen() {
           style={{ top: insets.top + TOP_GAP, right: insets.right + FLOATING_MARGIN }}
         />
       )}
+
+      <DivideModal
+        visible={divideModalVisible && divideTarget !== null}
+        shapeName={divideTarget ? SHAPE_NAMES[divideTarget.type] : 'фигура'}
+        onCancel={closeDivideModal}
+        onSubmit={handleDivideSubmit}
+      />
 
       <CoordinateModal
         visible={coordModalVisible}
