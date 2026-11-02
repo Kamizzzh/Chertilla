@@ -41,10 +41,68 @@ function projectFile(id: string): File {
   return new File(Paths.document, `project_${id}.json`);
 }
 
-/** Записывает текст в файл, создавая его при необходимости (старое содержимое заменяется). */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Убирает следы прерванной записи и возвращает бэкап, если основной файл не был заменён. */
+async function recoverJsonFile(file: File): Promise<void> {
+  const tempFile = new File(`${file.uri}.tmp`);
+  const backupFile = new File(`${file.uri}.bak`);
+
+  if (!file.exists) {
+    if (backupFile.exists) await backupFile.move(file);
+    if (tempFile.exists) tempFile.delete();
+    return;
+  }
+
+  if (tempFile.exists) tempFile.delete();
+  if (backupFile.exists) backupFile.delete();
+}
+
+/** Записывает JSON через временный файл, не затрагивая прежнюю версию до готовности новой. */
 async function writeJson(file: File, data: unknown): Promise<void> {
-  if (!file.exists) file.create();
-  await file.write(JSON.stringify(data));
+  const targetPath = file.uri;
+  const tempPath = `${targetPath}.tmp`;
+  const tempFile = new File(tempPath);
+  const backupFile = new File(`${targetPath}.bak`);
+  // Отдельный объект: move() меняет uri у перемещённого объекта, а file должен указывать на цель.
+  const targetFile = new File(targetPath);
+
+  try {
+    const json = JSON.stringify(data);
+
+    if (tempFile.exists) tempFile.delete();
+    tempFile.create();
+    await tempFile.write(json);
+
+    if (targetFile.exists) {
+      await targetFile.move(backupFile, { overwrite: true });
+    }
+
+    await tempFile.move(file);
+    if (backupFile.exists) backupFile.delete();
+  } catch (error) {
+    const details = [errorMessage(error)];
+
+    try {
+      // Новый объект нужен потому, что после move() uri у tempFile уже мог измениться.
+      const leftoverTempFile = new File(tempPath);
+      if (leftoverTempFile.exists) leftoverTempFile.delete();
+    } catch (cleanupError) {
+      details.push(`не удалось удалить .tmp: ${errorMessage(cleanupError)}`);
+    }
+
+    try {
+      if (backupFile.exists && !file.exists) {
+        await backupFile.move(file);
+      }
+    } catch (restoreError) {
+      details.push(`не удалось восстановить .bak: ${errorMessage(restoreError)}`);
+    }
+
+    throw new Error(`Не удалось сохранить файл ${file.name}: ${details.join('; ')}`);
+  }
 }
 
 /** Уникальный id проекта: время создания + случайный хвост (на случай двух проектов за 1 мс). */
@@ -63,6 +121,7 @@ async function writeIndex(projects: ProjectMeta[]): Promise<void> {
  */
 async function readIndex(): Promise<ProjectMeta[]> {
   const file = indexFile();
+  await recoverJsonFile(file);
   if (file.exists) {
     const data = JSON.parse(await file.text()) as Partial<IndexFile>;
     if (!Array.isArray(data.projects)) {
@@ -125,6 +184,7 @@ export async function saveProject(id: string, shapes: Shape[]): Promise<void> {
  */
 export async function loadProject(id: string): Promise<Shape[] | null> {
   const file = projectFile(id);
+  await recoverJsonFile(file);
   if (!file.exists) return null;
 
   const data = JSON.parse(await file.text()) as Partial<ProjectFile>;
