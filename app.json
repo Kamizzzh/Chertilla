@@ -52,7 +52,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "TELEGRAM_BOT_TOKEN": "9256001618:AAHZCWMk7gL4pAg8DOxiZwpFbEDtz9AJaCk",
+      "TELEGRAM_BOT_TOKEN": "9256001618:AAEC-_-npoiMkVZCoXs2LnDHk7IbOdEtNBcы",
       "TELEGRAM_CHAT_ID": "1241726180",
       "router": {
         "asyncRoutes": {
