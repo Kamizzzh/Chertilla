@@ -52,6 +52,8 @@
       "reactCompiler": true
     },
     "extra": {
+      "TELEGRAM_BOT_TOKEN": "9256001618:AAHZCWMk7gL4pAg8DOxiZwpFbEDtz9AJaCk",
+      "TELEGRAM_CHAT_ID": "1241726180",
       "router": {
         "asyncRoutes": {
           "web": true
