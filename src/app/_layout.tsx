@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Clipboard,
   Modal,
@@ -13,23 +14,42 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import type { ThemeColors } from '@/constants/theme';
+import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 import { deleteLastCrash, initErrorLogger, readLastCrash, sendToTelegram } from '@/utils/logger';
 
-export default function RootLayout() {
+void SplashScreen.preventAutoHideAsync();
+SplashScreen.setOptions({ duration: 250, fade: true });
+
+function RootLayoutContent() {
+  const { colorScheme, colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const [isAppReady, setIsAppReady] = useState(false);
   const [crashText, setCrashText] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
-    initErrorLogger();
     let isMounted = true;
 
-    const checkSavedCrash = async () => {
-      const savedCrash = await readLastCrash();
-      if (isMounted && savedCrash !== null) setCrashText(savedCrash);
+    const prepareApp = async () => {
+      try {
+        initErrorLogger();
+        const savedCrash = await readLastCrash();
+        if (isMounted && savedCrash !== null) setCrashText(savedCrash);
+      } catch (error) {
+        console.warn('Не удалось завершить инициализацию приложения', error);
+      } finally {
+        try {
+          await SplashScreen.hideAsync();
+        } catch (error) {
+          console.warn('Не удалось скрыть экран загрузки', error);
+        }
+        if (isMounted) setIsAppReady(true);
+      }
     };
 
-    void checkSavedCrash();
+    void prepareApp();
     return () => {
       isMounted = false;
     };
@@ -72,7 +92,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
-      <StatusBar style="dark" />
+      <StatusBar style={isAppReady && colorScheme === 'dark' ? 'light' : 'dark'} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         {/* Свайп от края экрана на iOS отключён: он мешает рисовать у края
@@ -81,7 +101,7 @@ export default function RootLayout() {
       </Stack>
 
       <Modal
-        visible={crashText !== null}
+        visible={isAppReady && crashText !== null}
         transparent
         animationType="fade"
         onRequestClose={() => {
@@ -124,85 +144,113 @@ export default function RootLayout() {
           </View>
         </View>
       </Modal>
+
+      {!isAppReady && (
+        <View style={styles.splashOverlay}>
+          <Text style={styles.splashText}>Chertilla</Text>
+        </View>
+      )}
     </GestureHandlerRootView>
   );
 }
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-  backdrop: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-  },
-  card: {
-    width: '100%',
-    maxWidth: 560,
-    maxHeight: '90%',
-    padding: 20,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-  },
-  title: {
-    marginBottom: 10,
-    color: '#1F2933',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  instruction: {
-    marginBottom: 14,
-    color: '#4B5563',
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  logScroll: {
-    flexGrow: 0,
-    maxHeight: 340,
-    marginBottom: 14,
-    padding: 10,
-    borderRadius: 6,
-    backgroundColor: '#F1F3F5',
-  },
-  logText: {
-    color: '#17202A',
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  error: {
-    marginBottom: 12,
-    color: '#C92A2A',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  buttons: {
-    gap: 10,
-  },
-  button: {
-    minHeight: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  copyButton: {
-    backgroundColor: '#495057',
-  },
-  retryButton: {
-    backgroundColor: '#208AEF',
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-});
+export default function RootLayout() {
+  return (
+    <ThemeProvider>
+      <RootLayoutContent />
+    </ThemeProvider>
+  );
+}
+
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    root: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    splashOverlay: {
+      ...StyleSheet.absoluteFill,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#FFFFFF',
+    },
+    splashText: {
+      color: '#111111',
+      fontSize: 34,
+      fontWeight: '600',
+      letterSpacing: 0.5,
+    },
+    backdrop: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 20,
+      backgroundColor: colors.overlay,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 560,
+      maxHeight: '90%',
+      padding: 20,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+    },
+    title: {
+      marginBottom: 10,
+      color: colors.text,
+      fontSize: 20,
+      fontWeight: '700',
+    },
+    instruction: {
+      marginBottom: 14,
+      color: colors.textMuted,
+      fontSize: 14,
+      lineHeight: 20,
+    },
+    logScroll: {
+      flexGrow: 0,
+      maxHeight: 340,
+      marginBottom: 14,
+      padding: 10,
+      borderRadius: 6,
+      backgroundColor: colors.surfaceSecondary,
+    },
+    logText: {
+      color: colors.textSecondary,
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+      fontSize: 12,
+      lineHeight: 18,
+    },
+    error: {
+      marginBottom: 12,
+      color: colors.danger,
+      fontSize: 13,
+      lineHeight: 18,
+    },
+    buttons: {
+      gap: 10,
+    },
+    button: {
+      minHeight: 46,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      borderRadius: 8,
+    },
+    copyButton: {
+      backgroundColor: colors.primary,
+    },
+    retryButton: {
+      backgroundColor: colors.accent,
+    },
+    buttonDisabled: {
+      opacity: 0.5,
+    },
+    buttonText: {
+      color: colors.onAccent,
+      fontSize: 15,
+      fontWeight: '600',
+      textAlign: 'center',
+    },
+  });

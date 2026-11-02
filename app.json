@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "Chertilla",
+    "name": "Чертилла",
     "slug": "chertilla",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "chertilla",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "icon": "./assets/expo.icon"
     },
@@ -29,9 +29,10 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/splash.png",
+          "imageWidth": 220,
+          "resizeMode": "contain"
         }
       ],
       "expo-sharing",

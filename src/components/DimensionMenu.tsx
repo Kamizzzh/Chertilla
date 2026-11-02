@@ -1,5 +1,8 @@
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { ThemeColors } from '@/constants/theme';
+import { useTheme } from '@/context/ThemeContext';
 import type { DimensionAxis } from '@/types/shapes';
 
 const MODES: { axis: DimensionAxis; label: string }[] = [
@@ -15,6 +18,9 @@ type Props = {
 
 /** Подменю инструмента «Размер»: какой размер строить. */
 export function DimensionMenu({ axis, onSelectAxis }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   return (
     <View style={styles.panel}>
       {MODES.map(({ axis: a, label }) => {
@@ -36,39 +42,40 @@ export function DimensionMenu({ axis, onSelectAxis }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  panel: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 6,
-    padding: 6,
-    borderRadius: 10,
-    backgroundColor: '#F5F5F5',
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-  },
-  button: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 6,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#CFD8DC',
-  },
-  buttonPressed: {
-    backgroundColor: '#ECEFF1',
-  },
-  buttonActive: {
-    backgroundColor: '#546E7A',
-    borderColor: '#546E7A',
-  },
-  buttonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#37474F',
-  },
-  buttonTextActive: {
-    color: '#FFFFFF',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    panel: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: 6,
+      padding: 6,
+      borderRadius: 10,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.borderSubtle,
+    },
+    button: {
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      borderRadius: 6,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    buttonPressed: {
+      backgroundColor: colors.surfaceSecondary,
+    },
+    buttonActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    buttonText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    buttonTextActive: {
+      color: colors.onPrimary,
+    },
+  });

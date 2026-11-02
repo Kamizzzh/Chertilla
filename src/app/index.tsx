@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -13,7 +13,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ProjectNameModal } from '@/components/ProjectNameModal';
+import type { ThemeColors } from '@/constants/theme';
 import { APP_VERSION } from '@/constants/version';
+import { useTheme } from '@/context/ThemeContext';
 import { createDebugProject, type DebugLevel } from '@/utils/debugProject';
 import { createProject, deleteProject, getProjects, type ProjectMeta } from '@/utils/storage';
 
@@ -35,6 +37,8 @@ function openProject(id: string) {
 
 /** Главное меню: список проектов, создание нового и отладочный проект. */
 export default function MenuScreen() {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [nameModalVisible, setNameModalVisible] = useState(false);
@@ -125,7 +129,7 @@ export default function MenuScreen() {
         },
       ]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Чертила</Text>
+        <Text style={styles.title}>Чертилла</Text>
         <Pressable
           onLongPress={() => {
             throw new Error('TEST CRASH: Проверка работы Telegram-логгера');
@@ -194,100 +198,101 @@ export default function MenuScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 10,
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: '#263238',
-  },
-  version: {
-    fontSize: 12,
-    color: '#9E9E9E',
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 24,
-  },
-  actionButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  createButton: {
-    flex: 1,
-    backgroundColor: '#546E7A',
-  },
-  createButtonPressed: {
-    backgroundColor: '#455A64',
-  },
-  // Оранжевая — чтобы отладочную кнопку не спутать с обычными действиями.
-  debugButton: {
-    backgroundColor: '#FB8C00',
-  },
-  debugButtonPressed: {
-    backgroundColor: '#EF6C00',
-  },
-  actionButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#78909C',
-    textTransform: 'uppercase',
-    marginBottom: 8,
-  },
-  listContent: {
-    paddingBottom: 16,
-  },
-  separator: {
-    height: 8,
-  },
-  item: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    gap: 4,
-  },
-  itemPressed: {
-    backgroundColor: '#ECEFF1',
-  },
-  itemName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#263238',
-  },
-  itemDate: {
-    fontSize: 12,
-    color: '#90A4AE',
-  },
-  empty: {
-    marginTop: 24,
-    textAlign: 'center',
-    fontSize: 14,
-    color: '#90A4AE',
-  },
-  footnote: {
-    marginTop: 8,
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#B0BEC5',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'baseline',
+      gap: 10,
+      marginBottom: 20,
+    },
+    title: {
+      fontSize: 30,
+      fontWeight: '800',
+      color: colors.text,
+    },
+    version: {
+      fontSize: 12,
+      color: colors.textSubtle,
+    },
+    actions: {
+      flexDirection: 'row',
+      gap: 10,
+      marginBottom: 24,
+    },
+    actionButton: {
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      borderRadius: 10,
+      alignItems: 'center',
+    },
+    createButton: {
+      flex: 1,
+      backgroundColor: colors.primary,
+    },
+    createButtonPressed: {
+      backgroundColor: colors.primaryPressed,
+    },
+    // Оранжевая — чтобы отладочную кнопку не спутать с обычными действиями.
+    debugButton: {
+      backgroundColor: colors.debug,
+    },
+    debugButtonPressed: {
+      backgroundColor: colors.debugPressed,
+    },
+    actionButtonText: {
+      fontSize: 15,
+      fontWeight: '700',
+      color: colors.onPrimary,
+    },
+    sectionTitle: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.textMuted,
+      textTransform: 'uppercase',
+      marginBottom: 8,
+    },
+    listContent: {
+      paddingBottom: 16,
+    },
+    separator: {
+      height: 8,
+    },
+    item: {
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      borderRadius: 10,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.borderSubtle,
+      gap: 4,
+    },
+    itemPressed: {
+      backgroundColor: colors.surfaceSecondary,
+    },
+    itemName: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    itemDate: {
+      fontSize: 12,
+      color: colors.textSubtle,
+    },
+    empty: {
+      marginTop: 24,
+      textAlign: 'center',
+      fontSize: 14,
+      color: colors.textSubtle,
+    },
+    footnote: {
+      marginTop: 8,
+      textAlign: 'center',
+      fontSize: 12,
+      color: colors.placeholder,
+    },
+  });

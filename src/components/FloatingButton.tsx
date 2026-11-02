@@ -1,4 +1,8 @@
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
+
+import type { ThemeColors } from '@/constants/theme';
+import { useTheme } from '@/context/ThemeContext';
 
 type Props = {
   /** Значок на кнопке (один символ). */
@@ -15,6 +19,9 @@ export const FLOATING_BUTTON_SIZE = 40;
 
 /** Круглая кнопка, «парящая» над холстом (возврат в меню, разворот панели). */
 export function FloatingButton({ icon, onPress, style, accessibilityLabel }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   return (
     <Pressable
       onPress={onPress}
@@ -28,30 +35,31 @@ export function FloatingButton({ icon, onPress, style, accessibilityLabel }: Pro
   );
 }
 
-const styles = StyleSheet.create({
-  button: {
-    position: 'absolute',
-    width: FLOATING_BUTTON_SIZE,
-    height: FLOATING_BUTTON_SIZE,
-    borderRadius: FLOATING_BUTTON_SIZE / 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#CFD8DC',
-    // Тень, чтобы кнопка была заметна поверх чертежа.
-    elevation: 4,
-    shadowColor: '#000000',
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  buttonPressed: {
-    backgroundColor: '#ECEFF1',
-  },
-  icon: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#37474F',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    button: {
+      position: 'absolute',
+      width: FLOATING_BUTTON_SIZE,
+      height: FLOATING_BUTTON_SIZE,
+      borderRadius: FLOATING_BUTTON_SIZE / 2,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      // Тень, чтобы кнопка была заметна поверх чертежа.
+      elevation: 4,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.25,
+      shadowRadius: 4,
+      shadowOffset: { width: 0, height: 2 },
+    },
+    buttonPressed: {
+      backgroundColor: colors.surfaceSecondary,
+    },
+    icon: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: colors.textSecondary,
+    },
+  });

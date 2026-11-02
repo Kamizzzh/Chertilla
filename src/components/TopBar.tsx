@@ -1,8 +1,11 @@
+import { useMemo } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FLOATING_BUTTON_SIZE } from '@/components/FloatingButton';
+import type { ThemeColors } from '@/constants/theme';
 import { APP_VERSION } from '@/constants/version';
+import { useTheme } from '@/context/ThemeContext';
 import type { ExportFormat } from '@/utils/shareExport';
 
 /** Отступ плавающих кнопок от края безопасной зоны, пт. */
@@ -34,6 +37,9 @@ type BarButtonProps = {
 
 /** Кнопка верхней панели. Неактивная — серая и не нажимается. */
 function BarButton({ label, disabled = false, onPress }: BarButtonProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   return (
     <Pressable
       onPress={onPress}
@@ -66,6 +72,8 @@ export function TopBar({
   onExport,
   onCollapse,
 }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
 
   // Загрузка заменяет весь чертёж, поэтому сначала спрашиваем подтверждение.
@@ -119,62 +127,63 @@ export function TopBar({
   );
 }
 
-const styles = StyleSheet.create({
-  bar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingBottom: 6,
-    backgroundColor: '#F5F5F5',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-  },
-  titleBlock: {
-    // Длинное название сжимается и обрезается троеточием, не выталкивая кнопки.
-    flexShrink: 1,
-    minWidth: 60,
-    // Высота не меньше круглой кнопки «Назад», чтобы та не вылезала за нижний край панели.
-    minHeight: FLOATING_BUTTON_SIZE,
-    justifyContent: 'center',
-  },
-  projectName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#263238',
-  },
-  version: {
-    fontSize: 11,
-    color: '#9E9E9E',
-  },
-  buttons: {
-    flex: 1,
-    flexDirection: 'row',
-    // На узком экране кнопки переносятся на вторую строку, а не уезжают за край.
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-    gap: 6,
-  },
-  button: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#CFD8DC',
-  },
-  buttonPressed: {
-    backgroundColor: '#ECEFF1',
-  },
-  buttonDisabled: {
-    backgroundColor: '#F5F5F5',
-    borderColor: '#E0E0E0',
-  },
-  buttonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#37474F',
-  },
-  buttonTextDisabled: {
-    color: '#BDBDBD',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    bar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingBottom: 6,
+      backgroundColor: colors.background,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.borderSubtle,
+    },
+    titleBlock: {
+      // Длинное название сжимается и обрезается троеточием, не выталкивая кнопки.
+      flexShrink: 1,
+      minWidth: 60,
+      // Высота не меньше круглой кнопки «Назад», чтобы та не вылезала за нижний край панели.
+      minHeight: FLOATING_BUTTON_SIZE,
+      justifyContent: 'center',
+    },
+    projectName: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    version: {
+      fontSize: 11,
+      color: colors.textSubtle,
+    },
+    buttons: {
+      flex: 1,
+      flexDirection: 'row',
+      // На узком экране кнопки переносятся на вторую строку, а не уезжают за край.
+      flexWrap: 'wrap',
+      justifyContent: 'flex-end',
+      gap: 6,
+    },
+    button: {
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 8,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    buttonPressed: {
+      backgroundColor: colors.surfaceSecondary,
+    },
+    buttonDisabled: {
+      backgroundColor: colors.background,
+      borderColor: colors.borderSubtle,
+    },
+    buttonText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    buttonTextDisabled: {
+      color: colors.disabledText,
+    },
+  });

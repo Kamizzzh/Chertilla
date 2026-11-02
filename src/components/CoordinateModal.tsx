@@ -11,6 +11,8 @@ import {
   View,
 } from 'react-native';
 
+import type { ThemeColors } from '@/constants/theme';
+import { useTheme } from '@/context/ThemeContext';
 import { parseNumber } from '@/utils/number';
 import { roundMm, type Point } from '@/utils/viewport';
 
@@ -126,6 +128,9 @@ export function CoordinateModal({
   onCancel,
   onSubmit,
 }: Props) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   // Значения полей сохраняются между открытиями окна — удобно вводить соседние точки.
   const [xText, setXText] = useState('0');
   const [yText, setYText] = useState('0');
@@ -329,7 +334,7 @@ export function CoordinateModal({
         submitBehavior={next ? 'submit' : undefined}
         selectTextOnFocus
         placeholder={placeholder}
-        placeholderTextColor="#B0BEC5"
+        placeholderTextColor={colors.placeholder}
         style={[styles.input, invalid && styles.inputInvalid]}
       />
     );
@@ -461,124 +466,125 @@ export function CoordinateModal({
 // Ширина подписи слева от поля: одинаковая для X, Y и кнопки R/D, чтобы поля стояли ровно.
 const LABEL_WIDTH = 36;
 
-const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    backgroundColor: 'rgba(0, 0, 0, 0.35)',
-  },
-  dialog: {
-    width: '100%',
-    maxWidth: 360,
-    padding: 20,
-    gap: 12,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-  },
-  title: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#263238',
-  },
-  hint: {
-    marginTop: -6,
-    fontSize: 13,
-    color: '#78909C',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  label: {
-    width: LABEL_WIDTH,
-    textAlign: 'center',
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#37474F',
-  },
-  toggle: {
-    width: LABEL_WIDTH,
-    height: LABEL_WIDTH,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 6,
-    backgroundColor: '#E3F2FD',
-    borderWidth: 1,
-    borderColor: '#1E88E5',
-  },
-  togglePressed: {
-    backgroundColor: '#BBDEFB',
-  },
-  toggleText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1565C0',
-  },
-  input: {
-    flex: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 6,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#90A4AE',
-    fontSize: 16,
-    color: '#212121',
-  },
-  inputInvalid: {
-    borderColor: '#E53935',
-    backgroundColor: '#FFEBEE',
-  },
-  unit: {
-    // Одинаковая ширина для «мм» и «°», чтобы поля были одной длины.
-    width: 24,
-    fontSize: 14,
-    color: '#78909C',
-  },
-  caption: {
-    marginTop: -4,
-    fontSize: 12,
-    color: '#90A4AE',
-  },
-  error: {
-    fontSize: 13,
-    color: '#E53935',
-  },
-  buttons: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10,
-    marginTop: 4,
-  },
-  button: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#ECEFF1',
-    borderWidth: 1,
-    borderColor: '#B0BEC5',
-  },
-  buttonPressed: {
-    backgroundColor: '#CFD8DC',
-  },
-  buttonPrimary: {
-    backgroundColor: '#546E7A',
-    borderColor: '#546E7A',
-  },
-  buttonPrimaryPressed: {
-    backgroundColor: '#455A64',
-  },
-  buttonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#37474F',
-  },
-  buttonTextPrimary: {
-    color: '#FFFFFF',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    backdrop: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+      backgroundColor: colors.overlay,
+    },
+    dialog: {
+      width: '100%',
+      maxWidth: 360,
+      padding: 20,
+      gap: 12,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.borderSubtle,
+    },
+    title: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    hint: {
+      marginTop: -6,
+      fontSize: 13,
+      color: colors.textMuted,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    label: {
+      width: LABEL_WIDTH,
+      textAlign: 'center',
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.textSecondary,
+    },
+    toggle: {
+      width: LABEL_WIDTH,
+      height: LABEL_WIDTH,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRadius: 6,
+      backgroundColor: colors.accentSurface,
+      borderWidth: 1,
+      borderColor: colors.accent,
+    },
+    togglePressed: {
+      backgroundColor: colors.accentSurfacePressed,
+    },
+    toggleText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.accentText,
+    },
+    input: {
+      flex: 1,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 6,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+      fontSize: 16,
+      color: colors.text,
+    },
+    inputInvalid: {
+      borderColor: colors.danger,
+      backgroundColor: colors.dangerSurface,
+    },
+    unit: {
+      // Одинаковая ширина для «мм» и «°», чтобы поля были одной длины.
+      width: 24,
+      fontSize: 14,
+      color: colors.textMuted,
+    },
+    caption: {
+      marginTop: -4,
+      fontSize: 12,
+      color: colors.textSubtle,
+    },
+    error: {
+      fontSize: 13,
+      color: colors.danger,
+    },
+    buttons: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: 10,
+      marginTop: 4,
+    },
+    button: {
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 8,
+      backgroundColor: colors.surfaceSecondary,
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+    },
+    buttonPressed: {
+      backgroundColor: colors.surfacePressed,
+    },
+    buttonPrimary: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    buttonPrimaryPressed: {
+      backgroundColor: colors.primaryPressed,
+    },
+    buttonText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    buttonTextPrimary: {
+      color: colors.onPrimary,
+    },
+  });

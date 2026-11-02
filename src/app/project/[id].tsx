@@ -18,6 +18,8 @@ import { Toolbar } from '@/components/Toolbar';
 import { FLOATING_MARGIN, TOP_GAP, TopBar } from '@/components/TopBar';
 import { DimensionMenu } from '@/components/DimensionMenu';
 import { XLineMenu } from '@/components/XLineMenu';
+import type { ThemeColors } from '@/constants/theme';
+import { useTheme } from '@/context/ThemeContext';
 import { useShapeHistory } from '@/hooks/useShapeHistory';
 import type { DimensionAxis, Shape, Tool, XLineMode } from '@/types/shapes';
 import { getArcFrom3Points, roundAngle } from '@/utils/geometry';
@@ -118,6 +120,8 @@ export default function ProjectScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const canvasRef = useRef<DrawingCanvasHandle>(null);
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [tool, setTool] = useState<Tool>('none');
   // Фигуры чертежа и история действий (Отменить / Вернуть).
@@ -957,130 +961,131 @@ export default function ProjectScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  canvasArea: {
-    flex: 1,
-  },
-  bottomOverlay: {
-    position: 'absolute',
-    bottom: 16,
-    gap: 10,
-    alignItems: 'flex-start',
-  },
-  coordButton: {
-    alignSelf: 'flex-end',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    height: 52,
-    paddingHorizontal: 20,
-    borderRadius: 26,
-    // Синий акцент — единственная цветная кнопка на экране, поэтому сразу заметна.
-    backgroundColor: '#1E88E5',
-    // Тень, чтобы кнопка «парила» над холстом.
-    elevation: 6,
-    shadowColor: '#000000',
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 3 },
-  },
-  coordButtonPressed: {
-    backgroundColor: '#1565C0',
-  },
-  coordButtonIcon: {
-    fontSize: 22,
-    color: '#FFFFFF',
-  },
-  coordButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  resetButton: {
-    alignSelf: 'flex-end',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#ECEFF1',
-    borderWidth: 1,
-    borderColor: '#B0BEC5',
-  },
-  resetButtonPressed: {
-    backgroundColor: '#CFD8DC',
-  },
-  resetButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#37474F',
-  },
-  actionPanel: {
-    alignSelf: 'stretch',
-    gap: 8,
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#CFD8DC',
-    elevation: 6,
-    shadowColor: '#000000',
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  actionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#1E88E5',
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  actionButton: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-    borderRadius: 8,
-    alignItems: 'center',
-    backgroundColor: '#ECEFF1',
-    borderWidth: 1,
-    borderColor: '#B0BEC5',
-  },
-  actionButtonPressed: {
-    backgroundColor: '#CFD8DC',
-  },
-  actionButtonDanger: {
-    backgroundColor: '#FFEBEE',
-    borderColor: '#E57373',
-  },
-  actionButtonDangerPressed: {
-    backgroundColor: '#FFCDD2',
-  },
-  actionButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#37474F',
-  },
-  actionButtonTextDanger: {
-    color: '#C62828',
-  },
-  perfArea: {
-    position: 'absolute',
-    alignItems: 'flex-end',
-    gap: 6,
-  },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFill,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  loadingText: {
-    fontSize: 15,
-    color: '#78909C',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    canvasArea: {
+      flex: 1,
+    },
+    bottomOverlay: {
+      position: 'absolute',
+      bottom: 16,
+      gap: 10,
+      alignItems: 'flex-start',
+    },
+    coordButton: {
+      alignSelf: 'flex-end',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      height: 52,
+      paddingHorizontal: 20,
+      borderRadius: 26,
+      // Синий акцент — единственная цветная кнопка на экране, поэтому сразу заметна.
+      backgroundColor: colors.accent,
+      // Тень, чтобы кнопка «парила» над холстом.
+      elevation: 6,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.3,
+      shadowRadius: 5,
+      shadowOffset: { width: 0, height: 3 },
+    },
+    coordButtonPressed: {
+      backgroundColor: colors.accentPressed,
+    },
+    coordButtonIcon: {
+      fontSize: 22,
+      color: colors.onAccent,
+    },
+    coordButtonText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: colors.onAccent,
+    },
+    resetButton: {
+      alignSelf: 'flex-end',
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 8,
+      backgroundColor: colors.surfaceSecondary,
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+    },
+    resetButtonPressed: {
+      backgroundColor: colors.surfacePressed,
+    },
+    resetButtonText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    actionPanel: {
+      alignSelf: 'stretch',
+      gap: 8,
+      padding: 10,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      elevation: 6,
+      shadowColor: colors.shadow,
+      shadowOpacity: 0.2,
+      shadowRadius: 5,
+      shadowOffset: { width: 0, height: 2 },
+    },
+    actionTitle: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.accentText,
+    },
+    actionButtons: {
+      flexDirection: 'row',
+      gap: 6,
+    },
+    actionButton: {
+      flex: 1,
+      paddingVertical: 10,
+      paddingHorizontal: 4,
+      borderRadius: 8,
+      alignItems: 'center',
+      backgroundColor: colors.surfaceSecondary,
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+    },
+    actionButtonPressed: {
+      backgroundColor: colors.surfacePressed,
+    },
+    actionButtonDanger: {
+      backgroundColor: colors.dangerSurface,
+      borderColor: colors.dangerBorder,
+    },
+    actionButtonDangerPressed: {
+      backgroundColor: colors.dangerPressed,
+    },
+    actionButtonText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: colors.textSecondary,
+    },
+    actionButtonTextDanger: {
+      color: colors.dangerText,
+    },
+    perfArea: {
+      position: 'absolute',
+      alignItems: 'flex-end',
+      gap: 6,
+    },
+    loadingOverlay: {
+      ...StyleSheet.absoluteFill,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.background,
+    },
+    loadingText: {
+      fontSize: 15,
+      color: colors.textMuted,
+    },
+  });
