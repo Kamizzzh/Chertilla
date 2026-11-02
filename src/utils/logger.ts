@@ -9,6 +9,8 @@ const TELEGRAM_MIN_INTERVAL_MS = 5_000;
 const TELEGRAM_REQUEST_TIMEOUT_MS = 10_000;
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4_000;
 
+type TelegramParseMode = 'MarkdownV2';
+
 let isLoggerInitialized = false;
 let lastTelegramRequestAt = 0;
 let telegramQueue: Promise<void> = Promise.resolve();
@@ -86,7 +88,12 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function postTelegramChunk(token: string, chatId: string, text: string): Promise<boolean> {
+async function postTelegramChunk(
+  token: string,
+  chatId: string,
+  text: string,
+  parseMode?: TelegramParseMode,
+): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
 
@@ -94,7 +101,7 @@ async function postTelegramChunk(token: string, chatId: string, text: string): P
     const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text }),
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode }),
       signal: controller.signal,
     });
 
@@ -106,20 +113,29 @@ async function postTelegramChunk(token: string, chatId: string, text: string): P
   }
 }
 
-async function sendToTelegramNow(text: string): Promise<boolean> {
+async function sendToTelegramNow(
+  text: string,
+  parseMode?: TelegramParseMode,
+): Promise<boolean> {
   const config = telegramConfig();
   if (!config || !text) return false;
 
-  // Telegram принимает до 4096 символов. Длинный стек отправляем частями без потерь.
-  for (let offset = 0; offset < text.length; offset += TELEGRAM_MAX_MESSAGE_LENGTH) {
+  // Telegram принимает до 4096 символов. Делим по строкам, чтобы не разорвать Markdown-разметку.
+  for (let offset = 0; offset < text.length; ) {
+    const remaining = text.slice(offset);
+    const firstPart = remaining.slice(0, TELEGRAM_MAX_MESSAGE_LENGTH);
+    const lastNewline =
+      remaining.length > TELEGRAM_MAX_MESSAGE_LENGTH ? firstPart.lastIndexOf('\n') : -1;
+    const chunk = lastNewline > 0 ? firstPart.slice(0, lastNewline + 1) : firstPart;
+
     const elapsed = Date.now() - lastTelegramRequestAt;
     const throttleDelay = Math.max(0, TELEGRAM_MIN_INTERVAL_MS - elapsed);
     if (throttleDelay > 0) await wait(throttleDelay);
 
     lastTelegramRequestAt = Date.now();
-    const chunk = text.slice(offset, offset + TELEGRAM_MAX_MESSAGE_LENGTH);
-    const sent = await postTelegramChunk(config.token, config.chatId, chunk);
+    const sent = await postTelegramChunk(config.token, config.chatId, chunk, parseMode);
     if (!sent) return false;
+    offset += chunk.length;
   }
 
   return true;
@@ -129,8 +145,8 @@ async function sendToTelegramNow(text: string): Promise<boolean> {
  * Ставит отправку в общую очередь: даже одновременные вызовы не нарушат лимит 1 сообщение / 5 секунд.
  * Возвращает false при офлайне, ошибке Telegram или незаполненной конфигурации.
  */
-export function sendToTelegram(text: string): Promise<boolean> {
-  const result = telegramQueue.then(() => sendToTelegramNow(text)).catch(() => false);
+export function sendToTelegram(text: string, parseMode?: TelegramParseMode): Promise<boolean> {
+  const result = telegramQueue.then(() => sendToTelegramNow(text, parseMode)).catch(() => false);
   telegramQueue = result.then(() => undefined);
   return result;
 }

@@ -21,6 +21,7 @@ type Props = {
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
+  onFeedback: () => void;
   /** Вызывается, только когда пользователь подтвердил загрузку. */
   onLoad: () => void;
   /** Вызывается с форматом, который пользователь выбрал в окне экспорта. */
@@ -68,6 +69,7 @@ export function TopBar({
   onUndo,
   onRedo,
   onSave,
+  onFeedback,
   onLoad,
   onExport,
   onCollapse,
@@ -117,6 +119,7 @@ export function TopBar({
 
       <View style={styles.buttons}>
         <BarButton label="💾 Сохранить" onPress={onSave} />
+        <BarButton label="🐞 Сообщить об ошибке" onPress={onFeedback} />
         <BarButton label="📂 Загрузить" onPress={confirmLoad} />
         <BarButton label="📤 Экспорт" onPress={chooseExportFormat} />
         <BarButton label="↶ Отменить" disabled={!canUndo} onPress={onUndo} />

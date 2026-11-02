@@ -12,6 +12,7 @@ import {
 } from '@/components/CoordinateModal';
 import { DrawingCanvas, type DrawingCanvasHandle, type EditMode } from '@/components/DrawingCanvas';
 import { DivideModal } from '@/components/DivideModal';
+import { FeedbackModal } from '@/components/FeedbackModal';
 import { FLOATING_BUTTON_SIZE, FloatingButton } from '@/components/FloatingButton';
 import { PerfMonitor, PerfToggle } from '@/components/PerfMonitor';
 import { SelectionVignette } from '@/components/SelectionVignette';
@@ -23,6 +24,8 @@ import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import { useShapeHistory } from '@/hooks/useShapeHistory';
 import type { DimensionAxis, Shape, Tool, XLineMode } from '@/types/shapes';
+import { recordAction } from '@/utils/actionHistory';
+import { sendFeedback } from '@/utils/feedback';
 import { divideShape, getArcFrom3Points, roundAngle } from '@/utils/geometry';
 import { computeIntersection } from '@/utils/intersection';
 import { parseNumber } from '@/utils/number';
@@ -78,6 +81,30 @@ const SHAPE_NAMES: Record<Shape['type'], string> = {
   dimension: 'Размер',
 };
 
+const SHAPE_CREATED_ACTIONS: Record<Shape['type'], string> = {
+  point: 'Создана точка',
+  segment: 'Создан отрезок',
+  circle: 'Создана окружность',
+  xline: 'Создана прямая',
+  rect: 'Создан прямоугольник',
+  arc: 'Создана дуга',
+  dimension: 'Создан размер',
+};
+
+const TOOL_NAMES: Record<Tool, string> = {
+  none: 'Без инструмента',
+  select: 'Выделение',
+  point: 'Точка',
+  segment: 'Отрезок',
+  circle: 'Окружность',
+  xline: 'Прямая',
+  rect: 'Прямоугольник',
+  arc: 'Дуга',
+  dimension: 'Размер',
+  intersect: 'Пересечение',
+  divide: 'Разделить',
+};
+
 // Размерная линия нового размера стоит на таком расстоянии от измеряемых точек, мм.
 // Потом её можно сдвинуть рукояткой.
 const DEFAULT_DIMENSION_OFFSET_MM = 10;
@@ -131,8 +158,8 @@ export default function ProjectScreen() {
   // Фигуры чертежа и история действий (Отменить / Вернуть).
   const {
     shapes,
-    addShape,
-    addShapes,
+    addShape: addShapeToHistory,
+    addShapes: addShapesToHistory,
     deleteShapes,
     updateShape,
     undo,
@@ -141,6 +168,23 @@ export default function ProjectScreen() {
     canUndo,
     canRedo,
   } = useShapeHistory();
+
+  // Все способы построения проходят через эти обёртки, поэтому журнал не зависит от жеста или окна ввода.
+  const addShape = useCallback(
+    (shape: Shape) => {
+      addShapeToHistory(shape);
+      recordAction(SHAPE_CREATED_ACTIONS[shape.type]);
+    },
+    [addShapeToHistory],
+  );
+  const addShapes = useCallback(
+    (newShapes: Shape[]) => {
+      if (newShapes.length === 0) return;
+      addShapesToHistory(newShapes);
+      recordAction(`Создано фигур: ${newShapes.length}`);
+    },
+    [addShapesToHistory],
+  );
 
   // id выделенных фигур (инструмент «Выделение»). Пустой массив — ничего не выделено.
   const [selectedShapeIds, setSelectedShapeIds] = useState<string[]>([]);
@@ -183,6 +227,7 @@ export default function ProjectScreen() {
   const [coordModalVisible, setCoordModalVisible] = useState(false);
   // Открыто ли окно «Изменить» (параметры единственной выделенной фигуры).
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
   // Фигура, которую можно изменить: выделена ровно одна.
   const editTarget = selectedCount === 1 ? selectedShapes[0] : null;
   const editFields = editTarget ? getEditFields(editTarget) : null;
@@ -321,6 +366,7 @@ export default function ProjectScreen() {
   };
 
   const selectTool = (next: Tool) => {
+    recordAction(next === 'none' ? 'Инструмент отключен' : `Выбран инструмент: ${TOOL_NAMES[next]}`);
     setTool(next);
     clearPending(); // при смене инструмента недостроенная фигура сбрасывается
     selectShapes([]); // и выделение тоже
@@ -332,6 +378,11 @@ export default function ProjectScreen() {
     if (selectedCount === 0) return;
     // Один шаг истории на все фигуры: одно «Отменить» вернёт их все.
     deleteShapes(selectedShapes.map((s) => s.id));
+    recordAction(
+      selectedCount === 1
+        ? `Удалена фигура: ${SHAPE_NAMES[selectedShapes[0].type]}`
+        : `Удалено фигур: ${selectedCount}`,
+    );
     selectShapes([]);
   };
 
@@ -410,6 +461,7 @@ export default function ProjectScreen() {
         break;
     }
     updateShape(editTarget.id, next);
+    recordAction(`Изменена фигура: ${SHAPE_NAMES[next.type]}`);
     setEditModalVisible(false);
     return null;
   };
@@ -418,6 +470,7 @@ export default function ProjectScreen() {
   // Фигура остаётся выделенной (id тот же).
   const handleCanvasUpdateShape = (shape: Shape) => {
     updateShape(shape.id, shape);
+    recordAction(`Изменена фигура: ${SHAPE_NAMES[shape.type]}`);
   };
 
   const selectDimensionAxis = (next: DimensionAxis) => {
@@ -430,15 +483,31 @@ export default function ProjectScreen() {
     clearPending();
   };
 
+  const handleToggleSnapToGrid = () => {
+    const next = !snapToGrid;
+    setSnapToGrid(next);
+    recordAction(next ? 'Включена привязка к сетке' : 'Выключена привязка к сетке');
+  };
+
+  const handleToggleOrtho = () => {
+    const next = !isOrthoEnabled;
+    setIsOrthoEnabled(next);
+    recordAction(next ? 'Включен Орто-режим' : 'Выключен Орто-режим');
+  };
+
   // При отмене, возврате и загрузке недостроенная фигура и выделение сбрасываются:
   // они могли относиться к уже исчезнувшему состоянию чертежа.
   const handleUndo = () => {
+    if (!canUndo) return;
+    recordAction('Отмена действия');
     clearPending();
     selectShapes([]);
     undo();
   };
 
   const handleRedo = () => {
+    if (!canRedo) return;
+    recordAction('Повтор действия');
     clearPending();
     selectShapes([]);
     redo();
@@ -449,8 +518,10 @@ export default function ProjectScreen() {
     try {
       await saveProject(id, shapes);
       setSavedShapes(shapes);
+      recordAction('Проект сохранён');
       return true;
     } catch (e) {
+      recordAction('Ошибка сохранения проекта');
       Alert.alert('Не удалось сохранить', e instanceof Error ? e.message : String(e));
       return false;
     }
@@ -458,6 +529,21 @@ export default function ProjectScreen() {
 
   const handleSave = async () => {
     if (await save()) Alert.alert('Сохранено', `Фигур в проекте: ${shapes.length}`);
+  };
+
+  const handleFeedbackSubmit = async (text: string): Promise<string | null> => {
+    const sent = await sendFeedback(text, {
+      projectId: id,
+      projectName,
+      toolName: TOOL_NAMES[tool],
+      shapeCount: shapes.length,
+      isDirty,
+    });
+    if (!sent) {
+      return 'Сообщение не отправлено. Проверьте интернет и настройку Telegram, затем повторите.';
+    }
+    recordAction('Отправлено сообщение об ошибке');
+    return null;
   };
 
   // Экспорт текущего чертежа (включая несохранённые изменения) в SVG или DXF.
@@ -487,6 +573,7 @@ export default function ProjectScreen() {
       setEditMode('none');
       setShapes(list); // заодно очищает историю: «Отменить» не откатит загрузку
       setSavedShapes(list);
+      recordAction(`Загружен проект: ${list.length} фигур`);
     },
     [setShapes],
   );
@@ -765,6 +852,7 @@ export default function ProjectScreen() {
           onUndo={handleUndo}
           onRedo={handleRedo}
           onSave={handleSave}
+          onFeedback={() => setFeedbackModalVisible(true)}
           onLoad={handleLoad}
           onExport={handleExport}
           onCollapse={() => setTopBarCollapsed(true)}
@@ -1004,9 +1092,9 @@ export default function ProjectScreen() {
         activeTool={tool}
         onSelectTool={selectTool}
         snapToGrid={snapToGrid}
-        onToggleSnapToGrid={() => setSnapToGrid((v) => !v)}
+        onToggleSnapToGrid={handleToggleSnapToGrid}
         isOrthoEnabled={isOrthoEnabled}
-        onToggleOrtho={() => setIsOrthoEnabled((v) => !v)}
+        onToggleOrtho={handleToggleOrtho}
         canCopy={tool === 'select' && selectedCount === 1}
         onCopy={handleCopySelected}
       />
@@ -1033,6 +1121,12 @@ export default function ProjectScreen() {
         shapeName={divideTarget ? SHAPE_NAMES[divideTarget.type] : 'фигура'}
         onCancel={closeDivideModal}
         onSubmit={handleDivideSubmit}
+      />
+
+      <FeedbackModal
+        visible={feedbackModalVisible}
+        onClose={() => setFeedbackModalVisible(false)}
+        onSubmit={handleFeedbackSubmit}
       />
 
       <CoordinateModal
