@@ -18,7 +18,6 @@ import { PerfMonitor, PerfToggle } from '@/components/PerfMonitor';
 import { SelectionVignette } from '@/components/SelectionVignette';
 import { Toolbar } from '@/components/Toolbar';
 import { FLOATING_MARGIN, TOP_GAP, TopBar } from '@/components/TopBar';
-import { DimensionMenu } from '@/components/DimensionMenu';
 import { XLineMenu } from '@/components/XLineMenu';
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
@@ -904,10 +903,6 @@ export default function ProjectScreen() {
             <Text style={styles.resetButtonText}>Сбросить вид</Text>
           </Pressable>
 
-          {tool === 'dimension' && (
-            <DimensionMenu axis={dimensionAxis} onSelectAxis={selectDimensionAxis} />
-          )}
-
           {tool === 'xline' && (
             <XLineMenu
               mode={xlineMode}
@@ -1091,12 +1086,16 @@ export default function ProjectScreen() {
       <Toolbar
         activeTool={tool}
         onSelectTool={selectTool}
+        dimensionAxis={dimensionAxis}
+        onSelectDimensionAxis={selectDimensionAxis}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={handleToggleSnapToGrid}
         isOrthoEnabled={isOrthoEnabled}
         onToggleOrtho={handleToggleOrtho}
         canCopy={tool === 'select' && selectedCount === 1}
         onCopy={handleCopySelected}
+        canDelete={selectedCount > 0}
+        onDelete={handleDeleteSelected}
       />
 
       {/* Плавающие кнопки рисуются последними, чтобы быть поверх панели и холста.
