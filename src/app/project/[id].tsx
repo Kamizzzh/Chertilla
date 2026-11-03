@@ -519,14 +519,16 @@ export default function ProjectScreen() {
       return;
     }
     if (samePoint(p, ucsOrigin)) return;
-    const angle = roundAngle((Math.atan2(p.y - ucsOrigin.y, p.x - ucsOrigin.x) * 180) / Math.PI);
+    const angle = (Math.atan2(p.y - ucsOrigin.y, p.x - ucsOrigin.x) * 180) / Math.PI;
     const number = nextUcsId++;
     const created: UCS = {
       id: `ucs-${number}`,
       name: `СК ${number}`,
       dx: roundMm(ucsOrigin.x),
       dy: roundMm(ucsOrigin.y),
-      angle,
+      // Чертёж поворачивается на -angle, поэтому выбранное направление становится
+      // горизонтальной осью X. Инверсия Y уже учтена в worldToScreen — второй минус не нужен.
+      angle: roundAngle(-angle),
     };
     setUcsList((current) => [...current, created]);
     activateUcs(created.id);

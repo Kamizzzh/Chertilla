@@ -1,5 +1,6 @@
 import {
   Canvas,
+  DashPathEffect,
   Group,
   Line,
   PaintStyle,
@@ -60,7 +61,7 @@ import { hitTest, shapesInRect } from '@/utils/hitTest';
 import { canIntersect } from '@/utils/intersection';
 import { findSnapPoint, type SnapResult } from '@/utils/snap';
 import { translateShape } from '@/utils/shapeTransform';
-import { drawingToScreen, screenToDrawing } from '@/utils/ucs';
+import { drawingToScreen, screenToDrawing, ucsToWorld } from '@/utils/ucs';
 import { addWavyArc, addWavySegment } from '@/utils/wavyPath';
 import {
   clampScale,
@@ -156,6 +157,8 @@ const SNAP_MARKER_HALF_PX = 6;
 const INTERSECT_MARKER_RADIUS_PX = 8;
 // Радиус точки под пальцем, px.
 const TOUCH_DOT_RADIUS_PX = 4;
+// Пунктир будущей оси X при создании СК, px экрана.
+const UCS_PREVIEW_DASH_PX = [8, 6];
 
 // Лупа: радиус, расстояние от пальца до нижнего края лупы и увеличение.
 const LOUPE_RADIUS_PX = 50;
@@ -1424,6 +1427,21 @@ export function DrawingCanvas({
     return path.build();
   });
 
+  // Будущая ось X: от первой точки СК до пальца; при привязке — точно до её точки.
+  // Координаты здесь экранные, поэтому длина штрихов не зависит от зума.
+  const ucsAxisPreviewPath = useDerivedValue(() => {
+    const origin = ucsOriginSV.get();
+    const t = touch.get();
+    if (!origin || !t || !ucsCreationActive) return noPath;
+    const vp = viewport.get();
+    const a = worldToScreen(vp, origin);
+    const b = worldToScreen(vp, t.target);
+    const path = Skia.PathBuilder.Make();
+    path.moveTo(a.x, a.y);
+    path.lineTo(b.x, b.y);
+    return path.build();
+  });
+
   // --- Перетаскивание рукоятки выделенной фигуры ---
   // Всё живёт в UI-потоке: фигура меняется за пальцем без участия React.
   // dragOrigin — фигура до начала перетаскивания (null — никто ничего не тянет),
@@ -1886,8 +1904,20 @@ export function DrawingCanvas({
       if (!success) return;
       const vp = viewport.get();
       if (ucsCreationActive) {
-        const world = screenToWorld(vp, { x: e.x, y: e.y });
-        onUcsTap({ x: roundMm(world.x), y: roundMm(world.y) });
+        const screenPoint = { x: e.x, y: e.y };
+        const world = screenToWorld(vp, screenPoint);
+        let target = { x: roundMm(world.x), y: roundMm(world.y) };
+        if (ucsOrigin) {
+          // Короткий тап использует ту же объектную привязку, что и лупа.
+          // Фигуры хранятся в активной СК, а новая СК задаётся в мировых координатах.
+          const drawingPoint = screenToDrawing(vp, screenPoint, activeUCS);
+          const snap = findSnapPoint(shapes, drawingPoint, SNAP_RADIUS_PX / safeK(vp));
+          if (snap) {
+            const snappedWorld = ucsToWorld(snap.p, activeUCS);
+            target = { x: roundMm(snappedWorld.x), y: roundMm(snappedWorld.y) };
+          }
+        }
+        onUcsTap(target);
         return;
       }
       const world = screenToDrawing(vp, { x: e.x, y: e.y }, ucsSV.get());
@@ -1954,12 +1984,20 @@ export function DrawingCanvas({
   const updateTouch = (x: number, y: number) => {
     'worklet';
     const vp = viewport.get();
+    const ucs = ucsSV.get();
     const rawWorld = ucsCreationActive
       ? screenToWorld(vp, { x, y })
-      : screenToDrawing(vp, { x, y }, ucsSV.get());
+      : screenToDrawing(vp, { x, y }, ucs);
     if (ucsCreationActive) {
-      // СК задаётся в мировых координатах: локальное преобразование здесь не нужно.
-      touch.set({ finger: { x, y }, target: rawWorld, snap: null });
+      // На втором тапе ищем привязку в локальных координатах фигур, а результат
+      // возвращаем в мировые: именно из мировых точек экран считает угол новой СК.
+      let snap: SnapResult | null = null;
+      if (ucsOriginSV.get()) {
+        const drawingPoint = screenToDrawing(vp, { x, y }, ucs);
+        const localSnap = findSnapPoint(shapesSV.get(), drawingPoint, SNAP_RADIUS_PX / safeK(vp));
+        if (localSnap) snap = { ...localSnap, p: ucsToWorld(localSnap.p, ucs) };
+      }
+      touch.set({ finger: { x, y }, target: snap ? snap.p : rawWorld, snap });
       return;
     }
     const orthoStart = tool === 'segment' || tool === 'xline' ? pendingStartSV.get() : null;
@@ -1987,7 +2025,14 @@ export function DrawingCanvas({
     .maxPointers(1)
     .onTouchesDown((e, manager) => {
       // Второй палец — пользователь передумал и двигает/зумирует вид. Лупу отменяем.
-      if (e.numberOfTouches > 1) manager.fail();
+      if (e.numberOfTouches > 1) {
+        manager.fail();
+        return;
+      }
+      // Для второй точки СК превью и привязка включаются сразу при касании,
+      // не дожидаясь LONG_PRESS_MS; сама лупа появится только после удержания.
+      const t = e.changedTouches[0];
+      if (ucsCreationActive && ucsOriginSV.get() && t) updateTouch(t.x, t.y);
     })
     .onStart((e) => {
       updateTouch(e.x, e.y);
@@ -2318,6 +2363,9 @@ export function DrawingCanvas({
           <Path path={ucsInactiveYPath} style="stroke" strokeWidth={1.5} color={COLORS.ucsY} opacity={0.35} />
           <Path path={ucsActiveXPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsX} />
           <Path path={ucsActiveYPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsY} />
+          <Path path={ucsAxisPreviewPath} style="stroke" strokeWidth={2} color={COLORS.ucsX}>
+            <DashPathEffect intervals={UCS_PREVIEW_DASH_PX} />
+          </Path>
           <Path path={ucsDraftPath} style="stroke" strokeWidth={2} color={COLORS.pending} />
 
           {/* Рукоятки выделенной фигуры — синие квадратики с белой обводкой, в px экрана. */}
