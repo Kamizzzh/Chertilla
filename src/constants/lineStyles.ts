@@ -8,7 +8,6 @@ export const LINE_STYLE_OPTIONS: { id: LineStyle; label: string }[] = [
   { id: 'dash_dot_thin', label: 'Штрихпунктирная тонкая' },
   { id: 'dash_dot_thick', label: 'Штрихпунктирная утолщённая' },
   { id: 'open_dotted', label: 'Разомкнутая, точечная' },
-  { id: 'solid_kinks', label: 'Сплошная с изломами' },
   { id: 'dash_dot_dot', label: 'Штрихпунктирная с двумя точками' },
 ];
 
@@ -21,8 +20,10 @@ export const DASH_INTERVALS_PX: Partial<Record<LineStyle, number[]>> = {
   dash_dot_dot: [16, 5, 1, 4, 1, 5],
 };
 
-export const WAVY_EFFECT = { length: 4, deviation: 1.2, seed: 0 };
-export const KINKS_EFFECT = { length: 14, deviation: 3, seed: 0 };
+/** Синусоида в мм чертежа: масштабируется вместе с фигурой при зуме. */
+export const WAVY_AMPLITUDE_MM = 0.8;
+export const WAVY_PERIOD_MM = 8;
+export const WAVY_SAMPLES_PER_PERIOD = 16;
 
 export const CAD_COLORS = [
   { value: '#FF0000', label: 'Красный' },

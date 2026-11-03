@@ -40,7 +40,6 @@ export type LineStyle =
   | 'dash_dot_thin'
   | 'dash_dot_thick'
   | 'open_dotted'
-  | 'solid_kinks'
   | 'dash_dot_dot';
 
 /** Внешний вид фигуры. autoColor !== false — цвет следует за темой холста. */

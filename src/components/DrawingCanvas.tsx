@@ -31,7 +31,11 @@ import {
 import { scheduleOnRN } from 'react-native-worklets';
 
 import { CANVAS_COLORS, type CanvasColors } from '@/constants/canvasTheme';
-import { DASH_INTERVALS_PX, KINKS_EFFECT, WAVY_EFFECT } from '@/constants/lineStyles';
+import {
+  DASH_INTERVALS_PX,
+  WAVY_AMPLITUDE_MM,
+  WAVY_PERIOD_MM,
+} from '@/constants/lineStyles';
 import type { LineStyle, Shape, Tool } from '@/types/shapes';
 import type { UCS } from '@/types/ucs';
 import {
@@ -57,6 +61,7 @@ import { canIntersect } from '@/utils/intersection';
 import { findSnapPoint, type SnapResult } from '@/utils/snap';
 import { translateShape } from '@/utils/shapeTransform';
 import { drawingToScreen, screenToDrawing } from '@/utils/ucs';
+import { addWavyArc, addWavySegment } from '@/utils/wavyPath';
 import {
   clampScale,
   gridStepMm,
@@ -674,26 +679,6 @@ function lineWidthFor(k: number, extraWidthPx: number, lineStyle: LineStyle): nu
 /** ГОСТовские штрихи задаются в px экрана и переводятся в локальные мм. */
 function applyLinePathEffect(paint: SkPaint, lineStyle: LineStyle, k: number) {
   'worklet';
-  if (lineStyle === 'wavy') {
-    paint.setPathEffect(
-      Skia.PathEffect.MakeDiscrete(
-        toLocal(WAVY_EFFECT.length, k),
-        toLocal(WAVY_EFFECT.deviation, k),
-        WAVY_EFFECT.seed,
-      ),
-    );
-    return;
-  }
-  if (lineStyle === 'solid_kinks') {
-    paint.setPathEffect(
-      Skia.PathEffect.MakeDiscrete(
-        toLocal(KINKS_EFFECT.length, k),
-        toLocal(KINKS_EFFECT.deviation, k),
-        KINKS_EFFECT.seed,
-      ),
-    );
-    return;
-  }
   const intervals = DASH_INTERVALS_PX[lineStyle];
   if (intervals) paint.setPathEffect(Skia.PathEffect.MakeDash(intervals.map((v) => toLocal(v, k)), 0));
 }
@@ -798,6 +783,10 @@ function recordShapes(
   const strokeCache: Record<string, SkPaint> = {};
   const textCache: Record<string, SkPaint> = {};
   const pointDiameter = toLocal(pointRadiusPx(k) * 2 * style.pointFactor, k);
+  // При обычном зуме волна растягивается вместе с чертежом. При сильном отдалении
+  // период и амплитуда не даём уменьшить до невидимого шума (и не строим миллионы точек).
+  const wavyAmplitudeMm = Math.max(WAVY_AMPLITUDE_MM, 3 / k);
+  const wavyPeriodMm = Math.max(WAVY_PERIOD_MM, 24 / k);
 
   const lod = shapes.length > LOD_MIN_SHAPES;
   const tinyCircleMm = LOD_TINY_CIRCLE_PX / k;
@@ -821,7 +810,15 @@ function recordShapes(
     if (s.type === 'dimension') {
       const layout = dimensionLayout(s);
       if (!layout) continue;
-      for (const [a, b] of layout.lines) canvas.drawLine(a.x, a.y, b.x, b.y, linePaint);
+      if (lineStyle === 'wavy') {
+        const path = Skia.PathBuilder.Make();
+        for (const [a, b] of layout.lines) {
+          addWavySegment(path, a, b, wavyAmplitudeMm, wavyPeriodMm);
+        }
+        canvas.drawPath(path.build(), linePaint);
+      } else {
+        for (const [a, b] of layout.lines) canvas.drawLine(a.x, a.y, b.x, b.y, linePaint);
+      }
       let textPaint = textCache[color];
       if (!textPaint) {
         textPaint = Skia.Paint();
@@ -857,12 +854,20 @@ function recordShapes(
           x: (s.start.x + s.end.x) / 2,
           y: (s.start.y + s.end.y) / 2,
         });
+      } else if (lineStyle === 'wavy') {
+        const path = Skia.PathBuilder.Make();
+        addWavySegment(path, s.start, s.end, wavyAmplitudeMm, wavyPeriodMm);
+        canvas.drawPath(path.build(), linePaint);
       } else {
         canvas.drawLine(s.start.x, s.start.y, s.end.x, s.end.y, linePaint);
       }
     } else if (s.type === 'circle') {
       if (lod && s.radius < tinyCircleMm) {
         addScenePoint(pointGroups, color, s.center);
+      } else if (lineStyle === 'wavy') {
+        const path = Skia.PathBuilder.Make();
+        addWavyArc(path, s.center, s.radius, 0, 360, wavyAmplitudeMm, wavyPeriodMm, true);
+        canvas.drawPath(path.build(), linePaint);
       } else {
         canvas.drawCircle(s.center.x, s.center.y, s.radius, linePaint);
       }
@@ -870,12 +875,38 @@ function recordShapes(
       const b = rectBox(s.p1, s.p2);
       if (lod && Math.max(b.x1 - b.x0, b.y1 - b.y0) < tinySegmentMm) {
         addScenePoint(pointGroups, color, { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 });
+      } else if (lineStyle === 'wavy') {
+        const corners = rectCorners(s.p1, s.p2);
+        const path = Skia.PathBuilder.Make();
+        for (let i = 0; i < corners.length; i++) {
+          addWavySegment(
+            path,
+            corners[i],
+            corners[(i + 1) % corners.length],
+            wavyAmplitudeMm,
+            wavyPeriodMm,
+          );
+        }
+        canvas.drawPath(path.build(), linePaint);
       } else {
         canvas.drawRect(Skia.XYWHRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0), linePaint);
       }
     } else if (s.type === 'arc') {
       if (lod && s.radius < tinyCircleMm) {
         addScenePoint(pointGroups, color, s.center);
+      } else if (lineStyle === 'wavy') {
+        const path = Skia.PathBuilder.Make();
+        addWavyArc(
+          path,
+          s.center,
+          s.radius,
+          s.startAngle,
+          arcSweep(s.startAngle, s.endAngle),
+          wavyAmplitudeMm,
+          wavyPeriodMm,
+          false,
+        );
+        canvas.drawPath(path.build(), linePaint);
       } else {
         // Угол в Skia растёт к оси +Y. Внутри матрицы чертежа ось Y смотрит вверх,
         // поэтому положительный угол — «против часовой», как и хранится дуга (см. addOutlines).
@@ -896,7 +927,15 @@ function recordShapes(
       const p = s.point;
       const t = clipLine(p, ux, uy, -Infinity, Infinity, c);
       if (!t) continue;
-      canvas.drawLine(p.x + ux * t[0], p.y + uy * t[0], p.x + ux * t[1], p.y + uy * t[1], linePaint);
+      const a = { x: p.x + ux * t[0], y: p.y + uy * t[0] };
+      const b = { x: p.x + ux * t[1], y: p.y + uy * t[1] };
+      if (lineStyle === 'wavy') {
+        const path = Skia.PathBuilder.Make();
+        addWavySegment(path, a, b, wavyAmplitudeMm, wavyPeriodMm);
+        canvas.drawPath(path.build(), linePaint);
+      } else {
+        canvas.drawLine(a.x, a.y, b.x, b.y, linePaint);
+      }
     }
   }
 
@@ -1068,6 +1107,32 @@ function constrainOrthoPoint(start: Point, point: Point, enabled: boolean): Poin
   return Math.abs(dx) > Math.abs(dy)
     ? { x: point.x, y: start.y }
     : { x: start.x, y: point.y };
+}
+
+/** Треугольный наконечник оси СК в px экрана. */
+function addUcsArrow(
+  path: SkPathBuilder,
+  tip: Point,
+  direction: Point,
+  length: number,
+  halfWidth: number,
+) {
+  'worklet';
+  const base = {
+    x: tip.x - direction.x * length,
+    y: tip.y - direction.y * length,
+  };
+  const normal = { x: -direction.y, y: direction.x };
+  path.moveTo(tip.x, tip.y);
+  path.lineTo(base.x + normal.x * halfWidth, base.y + normal.y * halfWidth);
+  path.lineTo(base.x - normal.x * halfWidth, base.y - normal.y * halfWidth);
+  path.close();
+}
+
+/** Точка лупы: при создании СК она мировая, при построении — локальная активной СК. */
+function touchTargetToScreen(vp: Viewport, p: Point, ucs: UCS, ucsCreation: boolean): Point {
+  'worklet';
+  return ucsCreation ? worldToScreen(vp, p) : drawingToScreen(vp, p, ucs);
 }
 
 export function DrawingCanvas({
@@ -1323,10 +1388,16 @@ export function DrawingCanvas({
       const o = worldToScreen(vp, { x: ucs.dx, y: ucs.dy });
       const rad = (ucs.angle * Math.PI) / 180;
       const length = active ? 52 : 38;
+      const xDirection = { x: Math.cos(rad), y: -Math.sin(rad) };
+      const yDirection = { x: -Math.sin(rad), y: -Math.cos(rad) };
+      const xTip = { x: o.x + xDirection.x * length, y: o.y + xDirection.y * length };
+      const yTip = { x: o.x + yDirection.x * length, y: o.y + yDirection.y * length };
       xPath.moveTo(o.x, o.y);
-      xPath.lineTo(o.x + Math.cos(rad) * length, o.y - Math.sin(rad) * length);
+      xPath.lineTo(xTip.x, xTip.y);
       yPath.moveTo(o.x, o.y);
-      yPath.lineTo(o.x - Math.sin(rad) * length, o.y - Math.cos(rad) * length);
+      yPath.lineTo(yTip.x, yTip.y);
+      addUcsArrow(xPath, xTip, xDirection, active ? 10 : 8, active ? 4 : 3);
+      addUcsArrow(yPath, yTip, yDirection, active ? 10 : 8, active ? 4 : 3);
       xPath.addCircle(o.x, o.y, active ? 3 : 2);
     }
     return {
@@ -1576,7 +1647,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t || !t.snap) return noPath;
     const path = Skia.PathBuilder.Make();
-    const p = drawingToScreen(viewport.get(), t.target, ucsSV.get());
+    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get(), ucsCreationActive);
     const h = SNAP_MARKER_HALF_PX;
     if (t.snap.kind === 'midpoint') {
       path.moveTo(p.x, p.y - h);
@@ -1600,7 +1671,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t) return noPath;
     const path = Skia.PathBuilder.Make();
-    const p = drawingToScreen(viewport.get(), t.target, ucsSV.get());
+    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get(), ucsCreationActive);
     path.addCircle(p.x, p.y, TOUCH_DOT_RADIUS_PX);
     return path.build();
   });
@@ -1637,7 +1708,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t) return NO_TRANSFORM;
     const c = loupeCenter.get();
-    const p = drawingToScreen(viewport.get(), t.target, ucsSV.get());
+    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get(), ucsCreationActive);
     return [
       { translateX: c.x },
       { translateY: c.y },
@@ -1761,7 +1832,7 @@ export function DrawingCanvas({
   // В режиме перетаскивания рукояток тапа и рамки нет — один палец мимо рукоятки двигает вид.
   // Только меняет сдвиг — никакого поиска привязки.
   const pan = Gesture.Pan()
-    .minPointers(tool === 'none' || dragMode ? 1 : 2)
+    .minPointers((tool === 'none' && !ucsCreationActive) || dragMode ? 1 : 2)
     .averageTouches(true)
     .onStart(startInteraction)
     .onChange((e) => {
@@ -1883,7 +1954,14 @@ export function DrawingCanvas({
   const updateTouch = (x: number, y: number) => {
     'worklet';
     const vp = viewport.get();
-    const rawWorld = screenToDrawing(vp, { x, y }, ucsSV.get());
+    const rawWorld = ucsCreationActive
+      ? screenToWorld(vp, { x, y })
+      : screenToDrawing(vp, { x, y }, ucsSV.get());
+    if (ucsCreationActive) {
+      // СК задаётся в мировых координатах: локальное преобразование здесь не нужно.
+      touch.set({ finger: { x, y }, target: rawWorld, snap: null });
+      return;
+    }
     const orthoStart = tool === 'segment' || tool === 'xline' ? pendingStartSV.get() : null;
     const world = orthoStart
       ? constrainOrthoPoint(orthoStart, rawWorld, isOrthoEnabledSV.get())
@@ -1904,7 +1982,7 @@ export function DrawingCanvas({
   // одного пальца и сразу отменяется, если на экране появился второй палец.
   // При «Выделении» лупы нет: точку ставить не нужно, а один палец тянет рамку выделения.
   const loupe = Gesture.Pan()
-    .enabled(drawingTool)
+    .enabled(drawingTool || ucsCreationActive)
     .activateAfterLongPress(LONG_PRESS_MS)
     .maxPointers(1)
     .onTouchesDown((e, manager) => {
@@ -1919,7 +1997,9 @@ export function DrawingCanvas({
     .onEnd((_e, success) => {
       const t = touch.get();
       if (!success || !t) return;
-      scheduleOnRN(onTap, { x: roundMm(t.target.x), y: roundMm(t.target.y) });
+      const target = { x: roundMm(t.target.x), y: roundMm(t.target.y) };
+      if (ucsCreationActive) scheduleOnRN(onUcsTap, target);
+      else scheduleOnRN(onTap, target);
     })
     .onFinalize(() => {
       // Жест лупы заканчивается и у каждого короткого тапа — тогда лупы и не было,
@@ -2163,7 +2243,10 @@ export function DrawingCanvas({
   // сдвиг сразу начинает Move, а неподвижное долгое нажатие по-прежнему начинает рамку.
   const gesture = Gesture.Exclusive(
     handleDrag,
-    Gesture.Simultaneous(pan, pinch, tap, loupe, Gesture.Race(shapeMove, marqueeGesture)),
+    // Лупа имеет приоритет над тапом: при коротком касании она отклоняется и срабатывает
+    // тап, а долгое нажатие перехватывает касание даже во время создания СК.
+    loupe,
+    Gesture.Simultaneous(pan, pinch, tap, Gesture.Race(shapeMove, marqueeGesture)),
   );
 
   const onLayout = (e: LayoutChangeEvent) => {
@@ -2226,7 +2309,11 @@ export function DrawingCanvas({
           {scene}
           <Path path={touchDot} style="fill" color={touchDotColor} />
 
-          {/* Активная СК яркая, остальные — полупрозрачные. */}
+          {/* Активная СК яркая, остальные — полупрозрачные; концы осей — треугольники. */}
+          <Path path={ucsInactiveXPath} style="fill" color={COLORS.ucsX} opacity={0.35} />
+          <Path path={ucsInactiveYPath} style="fill" color={COLORS.ucsY} opacity={0.35} />
+          <Path path={ucsActiveXPath} style="fill" color={COLORS.ucsX} />
+          <Path path={ucsActiveYPath} style="fill" color={COLORS.ucsY} />
           <Path path={ucsInactiveXPath} style="stroke" strokeWidth={1.5} color={COLORS.ucsX} opacity={0.35} />
           <Path path={ucsInactiveYPath} style="stroke" strokeWidth={1.5} color={COLORS.ucsY} opacity={0.35} />
           <Path path={ucsActiveXPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsX} />

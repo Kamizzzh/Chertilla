@@ -127,6 +127,17 @@ const DEFAULT_DIMENSION_OFFSET_MM = 10;
 // Дубликат смещается по обеим осям, чтобы не лежать точно поверх исходной фигуры.
 const COPY_OFFSET_MM = 10;
 
+const DEFAULT_LINE_COLORS: Record<LineStyle, string | null> = {
+  solid_thick: null,
+  solid_thin: null,
+  wavy: null,
+  dashed: null,
+  dash_dot_thin: null,
+  dash_dot_thick: null,
+  open_dotted: null,
+  dash_dot_dot: null,
+};
+
 /** Какие поля показать в окне «Изменить» и чем их заполнить — по типу фигуры. */
 function getEditFields(shape: Shape): { fields: CoordinateFields; initial: CoordinateInitial } {
   switch (shape.type) {
@@ -240,9 +251,10 @@ export default function ProjectScreen() {
   // Вид размера для инструмента «Размер».
   const [dimensionAxis, setDimensionAxis] = useState<DimensionAxis>('aligned');
 
-  // Текущий CAD-стиль для новых фигур; null — автоматический чёрный/белый цвет.
+  // У каждого CAD-стиля свой запомненный цвет; null — автоматический чёрный/белый.
   const [lineStyle, setLineStyle] = useState<LineStyle>('solid_thin');
-  const [lineColor, setLineColor] = useState<string | null>(null);
+  const [styleColors, setStyleColors] = useState<Record<LineStyle, string | null>>(DEFAULT_LINE_COLORS);
+  const lineColor = styleColors[lineStyle];
   const appearance: ShapeAppearance = {
     lineStyle,
     color: lineColor ?? canvasColors.shape,
@@ -252,6 +264,8 @@ export default function ProjectScreen() {
   // СК живут на экране проекта: активная применяется к холсту, список — к меткам и окну.
   const [ucsList, setUcsList] = useState<UCS[]>([WCS]);
   const [activeUcsId, setActiveUcsId] = useState(WCS.id);
+  // Последний элемент — текущая СК, перед ним — та, которая была активна раньше.
+  const [ucsActivationStack, setUcsActivationStack] = useState<string[]>([WCS.id]);
   const activeUCS = ucsList.find((ucs) => ucs.id === activeUcsId) ?? WCS;
   const [savedUcsList, setSavedUcsList] = useState<UCS[] | null>(null);
   const [savedActiveUcsId, setSavedActiveUcsId] = useState(WCS.id);
@@ -407,8 +421,10 @@ export default function ProjectScreen() {
     if (ids.length === 1) {
       const shape = shapes.find((s) => s.id === ids[0]);
       if (shape) {
-        setLineStyle(shape.lineStyle ?? 'solid_thin');
-        setLineColor(shape.autoColor === false ? shape.color : null);
+        const style = shape.lineStyle ?? 'solid_thin';
+        const color = shape.autoColor === false ? shape.color : null;
+        setLineStyle(style);
+        setStyleColors((current) => ({ ...current, [style]: color }));
       }
     }
   };
@@ -424,14 +440,22 @@ export default function ProjectScreen() {
   const handleLineStyleChange = (next: LineStyle) => {
     setLineStyle(next);
     if (tool === 'select' && selectedShapes.length > 0) {
-      updateShapes(selectedShapes.map((shape) => ({ ...shape, lineStyle: next })));
+      const nextColor = styleColors[next];
+      updateShapes(
+        selectedShapes.map((shape) => ({
+          ...shape,
+          lineStyle: next,
+          color: nextColor ?? canvasColors.shape,
+          autoColor: nextColor === null,
+        })),
+      );
       recordAction('Изменён стиль выделенных фигур');
     }
   };
 
-  const handleLineColorChange = (next: string | null) => {
-    setLineColor(next);
-    if (tool === 'select' && selectedShapes.length > 0) {
+  const handleLineColorChange = (style: LineStyle, next: string | null) => {
+    setStyleColors((current) => ({ ...current, [style]: next }));
+    if (style === lineStyle && tool === 'select' && selectedShapes.length > 0) {
       updateShapes(
         selectedShapes.map((shape) => ({
           ...shape,
@@ -443,16 +467,36 @@ export default function ProjectScreen() {
     }
   };
 
+  const activateUcs = (ucsId: string) => {
+    if (ucsId === activeUcsId) return;
+    const previousId = activeUcsId;
+    setActiveUcsId(ucsId);
+    setUcsActivationStack((current) => [
+      ...current.filter(
+        (id) => id !== ucsId && id !== previousId && ucsList.some((ucs) => ucs.id === id),
+      ),
+      previousId,
+      ucsId,
+    ]);
+  };
+
   const deleteUcs = (ucsId: string) => {
     if (ucsId === WCS.id) return;
-    setUcsList((current) => current.filter((ucs) => ucs.id !== ucsId));
-    if (activeUcsId === ucsId) setActiveUcsId(WCS.id);
+    const nextList = ucsList.filter((ucs) => ucs.id !== ucsId);
+    const nextHistory = ucsActivationStack.filter(
+      (id) => id !== ucsId && nextList.some((ucs) => ucs.id === id),
+    );
+    setUcsList(nextList);
+    setUcsActivationStack(nextHistory.length > 0 ? nextHistory : [WCS.id]);
+    if (activeUcsId === ucsId) {
+      setActiveUcsId(nextHistory[nextHistory.length - 1] ?? WCS.id);
+    }
     recordAction('Удалена система координат');
   };
 
   const handleUcsAction = (action: UcsAction) => {
     if (action === 'wcs') {
-      setActiveUcsId(WCS.id);
+      activateUcs(WCS.id);
       setUcsCreationActive(false);
       setUcsOrigin(null);
       recordAction('Активна мировая система координат');
@@ -485,7 +529,7 @@ export default function ProjectScreen() {
       angle,
     };
     setUcsList((current) => [...current, created]);
-    setActiveUcsId(created.id);
+    activateUcs(created.id);
     setUcsCreationActive(false);
     setUcsOrigin(null);
     recordAction(`Создана система координат: ${created.name}`);
@@ -698,6 +742,9 @@ export default function ProjectScreen() {
       setUcsOrigin(null);
       setUcsList(loadedUcsList);
       setActiveUcsId(result.activeUcs.id);
+      setUcsActivationStack(
+        result.activeUcs.id === WCS.id ? [WCS.id] : [WCS.id, result.activeUcs.id],
+      );
       setSavedUcsList(loadedUcsList);
       setSavedActiveUcsId(result.activeUcs.id);
       setShapes(list); // заодно очищает историю: «Отменить» не откатит загрузку
@@ -1031,7 +1078,7 @@ export default function ProjectScreen() {
           <LineStylePicker
             visible
             lineStyle={lineStyle}
-            color={lineColor}
+            styleColors={styleColors}
             onSelectStyle={handleLineStyleChange}
             onSelectColor={handleLineColorChange}
           />
@@ -1298,7 +1345,7 @@ export default function ProjectScreen() {
         systems={ucsList}
         activeId={activeUcsId}
         onSelect={(ucsId) => {
-          setActiveUcsId(ucsId);
+          activateUcs(ucsId);
           recordAction('Переключена система координат');
         }}
         onDelete={deleteUcs}

@@ -1,23 +1,20 @@
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import {
-  Canvas,
-  DashPathEffect,
-  DiscretePathEffect,
-  Path,
-} from '@shopify/react-native-skia';
+import { Canvas, DashPathEffect, Path } from '@shopify/react-native-skia';
 
 import {
   CAD_COLORS,
   DASH_INTERVALS_PX,
-  KINKS_EFFECT,
   LINE_STYLE_OPTIONS,
-  WAVY_EFFECT,
+  WAVY_AMPLITUDE_MM,
+  WAVY_PERIOD_MM,
 } from '@/constants/lineStyles';
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import type { LineStyle } from '@/types/shapes';
+import { PX_PER_MM } from '@/utils/viewport';
+import { makeWavyLinePath } from '@/utils/wavyPath';
 
 const PANEL_WIDTH = 292;
 const MAIN_BUTTON_WIDTH = 154;
@@ -29,9 +26,9 @@ const MAIN_PREVIEW_WIDTH = 108;
 type LineStylePickerProps = {
   visible: boolean;
   lineStyle: LineStyle;
-  color: string | null;
+  styleColors: Record<LineStyle, string | null>;
   onSelectStyle: (style: LineStyle) => void;
-  onSelectColor: (color: string | null) => void;
+  onSelectColor: (style: LineStyle, color: string | null) => void;
 };
 
 type LinePreviewProps = {
@@ -43,7 +40,18 @@ type LinePreviewProps = {
 function LinePreview({ lineStyle, color, width }: LinePreviewProps) {
   const intervals = DASH_INTERVALS_PX[lineStyle];
   const isThick = lineStyle === 'solid_thick' || lineStyle === 'dash_dot_thick';
-  const path = `M 2 ${PREVIEW_HEIGHT / 2} L ${width - 2} ${PREVIEW_HEIGHT / 2}`;
+  const path = useMemo(
+    () =>
+      lineStyle === 'wavy'
+        ? makeWavyLinePath(
+            { x: 2, y: PREVIEW_HEIGHT / 2 },
+            { x: width - 2, y: PREVIEW_HEIGHT / 2 },
+            WAVY_AMPLITUDE_MM * PX_PER_MM,
+            WAVY_PERIOD_MM * PX_PER_MM,
+          )
+        : `M 2 ${PREVIEW_HEIGHT / 2} L ${width - 2} ${PREVIEW_HEIGHT / 2}`,
+    [lineStyle, width],
+  );
 
   return (
     <Canvas style={{ width, height: PREVIEW_HEIGHT }} pointerEvents="none">
@@ -56,20 +64,6 @@ function LinePreview({ lineStyle, color, width }: LinePreviewProps) {
         strokeJoin="round"
       >
         {intervals ? <DashPathEffect intervals={intervals} /> : null}
-        {lineStyle === 'wavy' ? (
-          <DiscretePathEffect
-            length={WAVY_EFFECT.length}
-            deviation={WAVY_EFFECT.deviation}
-            seed={WAVY_EFFECT.seed}
-          />
-        ) : null}
-        {lineStyle === 'solid_kinks' ? (
-          <DiscretePathEffect
-            length={KINKS_EFFECT.length}
-            deviation={KINKS_EFFECT.deviation}
-            seed={KINKS_EFFECT.seed}
-          />
-        ) : null}
       </Path>
     </Canvas>
   );
@@ -78,7 +72,7 @@ function LinePreview({ lineStyle, color, width }: LinePreviewProps) {
 export default function LineStylePicker({
   visible,
   lineStyle,
-  color,
+  styleColors,
   onSelectStyle,
   onSelectColor,
 }: LineStylePickerProps) {
@@ -88,6 +82,7 @@ export default function LineStylePicker({
   const [paletteStyle, setPaletteStyle] = useState<LineStyle | null>(null);
 
   const automaticColor = colorScheme === 'dark' ? '#FFFFFF' : '#000000';
+  const color = styleColors[lineStyle];
   const previewColor = color ?? automaticColor;
   const currentStyleLabel =
     LINE_STYLE_OPTIONS.find((option) => option.id === lineStyle)?.label ?? 'Текущий';
@@ -108,8 +103,8 @@ export default function LineStylePicker({
     closePanels();
   };
 
-  const handleSelectColor = (selectedColor: string | null) => {
-    onSelectColor(selectedColor);
+  const handleSelectColor = (style: LineStyle, selectedColor: string | null) => {
+    onSelectColor(style, selectedColor);
     closePanels();
   };
 
@@ -148,6 +143,7 @@ export default function LineStylePicker({
             {LINE_STYLE_OPTIONS.map((option) => {
               const selected = option.id === lineStyle;
               const paletteOpen = paletteStyle === option.id;
+              const optionColor = styleColors[option.id];
 
               return (
                 <View
@@ -167,7 +163,7 @@ export default function LineStylePicker({
                     >
                       <LinePreview
                         lineStyle={option.id}
-                        color={previewColor}
+                        color={optionColor ?? automaticColor}
                         width={PREVIEW_WIDTH}
                       />
                     </Pressable>
@@ -196,11 +192,11 @@ export default function LineStylePicker({
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={`Автоматический цвет: ${colorScheme === 'dark' ? 'белый' : 'чёрный'}`}
-                        accessibilityState={{ selected: color === null }}
-                        onPress={() => handleSelectColor(null)}
+                        accessibilityState={{ selected: optionColor === null }}
+                        onPress={() => handleSelectColor(option.id, null)}
                         style={({ pressed }) => [
                           styles.colorButton,
-                          color === null && styles.colorButtonSelected,
+                          optionColor === null && styles.colorButtonSelected,
                           pressed && styles.pressed,
                         ]}
                       >
@@ -217,11 +213,11 @@ export default function LineStylePicker({
                           key={cadColor.value}
                           accessibilityRole="button"
                           accessibilityLabel={`Цвет линии: ${cadColor.label}`}
-                          accessibilityState={{ selected: color === cadColor.value }}
-                          onPress={() => handleSelectColor(cadColor.value)}
+                          accessibilityState={{ selected: optionColor === cadColor.value }}
+                          onPress={() => handleSelectColor(option.id, cadColor.value)}
                           style={({ pressed }) => [
                             styles.colorButton,
-                            color === cadColor.value && styles.colorButtonSelected,
+                            optionColor === cadColor.value && styles.colorButtonSelected,
                             pressed && styles.pressed,
                           ]}
                         >
