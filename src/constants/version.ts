@@ -1,2 +1,2 @@
 // Номер версии приложения, формат Major.Minor.Feature.Build (см. CLAUDE.md).
-export const APP_VERSION = '0.1.8.0006';
+export const APP_VERSION = '0.1.9.0004';

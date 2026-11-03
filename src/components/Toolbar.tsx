@@ -1,13 +1,28 @@
-import { useEffect, useMemo, useState, type ComponentProps } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { ScrollView, StyleSheet, Text, View, type ViewInstance } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  DEFAULT_METHOD_IDS,
+  isConstructionTool,
+  SubMenu,
+  type ConstructionTool,
+  type SubMenuOption,
+} from '@/components/SubMenu';
+import {
+  Tooltip,
+  TooltipPressable,
+  type TooltipAnchor,
+  type TooltipContent,
+  type TooltipPreviewKind,
+} from '@/components/Tooltip';
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import type { DimensionAxis, Tool } from '@/types/shapes';
 import type { UcsAction } from '@/types/ucs';
+import type { SharedNativeGesture } from '@/types/gestures';
 import { WCS } from '@/utils/ucs';
 
 type ActiveTool = Exclude<Tool, 'none'>;
@@ -20,7 +35,6 @@ type ToolMenuItem = {
   tool: ActiveTool;
   label: string;
   icon: IconName;
-  axis?: DimensionAxis;
 };
 
 type ActionMenuItem = {
@@ -53,7 +67,7 @@ const CATEGORIES: Record<CategoryId, Category> = {
     label: 'Построение',
     icon: 'pencil-ruler',
     items: [
-      { kind: 'tool', id: 'point', tool: 'point', label: 'Точка', icon: 'circle-outline' },
+      { kind: 'tool', id: 'point', tool: 'point', label: 'Точка', icon: 'vector-point' },
       { kind: 'tool', id: 'segment', tool: 'segment', label: 'Отрезок', icon: 'minus' },
       { kind: 'tool', id: 'circle', tool: 'circle', label: 'Окружность', icon: 'circle-outline' },
       { kind: 'tool', id: 'xline', tool: 'xline', label: 'Прямая', icon: 'vector-line' },
@@ -66,30 +80,7 @@ const CATEGORIES: Record<CategoryId, Category> = {
     label: 'Анализ',
     icon: 'ruler',
     items: [
-      {
-        kind: 'tool',
-        id: 'dimension-aligned',
-        tool: 'dimension',
-        axis: 'aligned',
-        label: 'Параллельный',
-        icon: 'ruler',
-      },
-      {
-        kind: 'tool',
-        id: 'dimension-x',
-        tool: 'dimension',
-        axis: 'x',
-        label: 'Размер X',
-        icon: 'arrow-left-right',
-      },
-      {
-        kind: 'tool',
-        id: 'dimension-y',
-        tool: 'dimension',
-        axis: 'y',
-        label: 'Размер Y',
-        icon: 'arrow-up-down',
-      },
+      { kind: 'tool', id: 'dimension', tool: 'dimension', label: 'Размеры', icon: 'ruler' },
       {
         kind: 'tool',
         id: 'intersect',
@@ -123,6 +114,101 @@ const CATEGORIES: Record<CategoryId, Category> = {
   },
 };
 
+const ITEM_TOOLTIPS: Record<string, { description: string; preview: TooltipPreviewKind }> = {
+  'tool:point': {
+    description: 'Открывает способы размещения точек на чертеже.',
+    preview: 'point',
+  },
+  'tool:segment': {
+    description: 'Открывает способы построения отрезков.',
+    preview: 'line',
+  },
+  'tool:circle': {
+    description: 'Открывает способы построения окружностей.',
+    preview: 'circle',
+  },
+  'tool:xline': {
+    description: 'Строит бесконечную разметочную прямую выбранным способом.',
+    preview: 'line',
+  },
+  'tool:rect': {
+    description: 'Открывает способы построения прямоугольников.',
+    preview: 'rect',
+  },
+  'tool:arc': {
+    description: 'Открывает способы построения дуг.',
+    preview: 'arc',
+  },
+  'tool:dimension': {
+    description: 'Открывает выбор вида размера и способа измерения.',
+    preview: 'dimension',
+  },
+  'tool:intersect': {
+    description: 'Создаёт точку в пересечении двух выбранных фигур.',
+    preview: 'intersect',
+  },
+  'tool:divide': {
+    description: 'Делит отрезок, окружность или дугу на равные части.',
+    preview: 'divide',
+  },
+  'tool:select': {
+    description: 'Выделяет фигуры тапом или рамкой для редактирования.',
+    preview: 'select',
+  },
+  'action:copy': {
+    description: 'Копирует единственную выделенную фигуру со сдвигом 10 мм.',
+    preview: 'action',
+  },
+  'action:delete': {
+    description: 'Удаляет выделенные фигуры одним действием истории.',
+    preview: 'action',
+  },
+  'ucs:wcs': {
+    description: 'Возвращает мировую систему координат чертежа.',
+    preview: 'coordinates',
+  },
+  'ucs:create': {
+    description: 'Начинает создание пользовательской системы координат.',
+    preview: 'coordinates',
+  },
+  'ucs:delete': {
+    description: 'Удаляет активную пользовательскую систему координат.',
+    preview: 'action',
+  },
+  'ucs:list': {
+    description: 'Открывает список сохранённых систем координат проекта.',
+    preview: 'coordinates',
+  },
+};
+
+const CATEGORY_TOOLTIPS: Record<CategoryId, TooltipContent> = {
+  construction: {
+    title: 'Построение',
+    description: 'Открывает инструменты создания геометрических фигур.',
+    preview: 'line',
+  },
+  analysis: {
+    title: 'Анализ',
+    description: 'Открывает размеры, пересечения и деление фигур.',
+    preview: 'dimension',
+  },
+  editing: {
+    title: 'Редактирование',
+    description: 'Открывает выделение, копирование и удаление фигур.',
+    preview: 'select',
+  },
+  coordinates: {
+    title: 'Системы координат',
+    description: 'Открывает действия с мировой и пользовательскими СК.',
+    preview: 'coordinates',
+  },
+};
+
+function getMenuItemTooltip(item: MenuItem): TooltipContent {
+  const content = ITEM_TOOLTIPS[`${item.kind}:${item.id}`];
+  return { title: item.label, description: content.description, preview: content.preview };
+}
+
 const CATEGORY_ORDER: CategoryId[] = ['construction', 'analysis', 'editing', 'coordinates'];
 const MENU_ANIMATION_MS = 180;
 const CATEGORY_BUTTON_HEIGHT = 56;
@@ -131,6 +217,7 @@ const TOOLBAR_HEIGHT = CATEGORY_BUTTON_HEIGHT + TOOLBAR_VERTICAL_PADDING * 2;
 const SUBMENU_GAP = 8;
 
 type Props = {
+  nativeGesture: SharedNativeGesture;
   activeTool: Tool;
   onSelectTool: (tool: Tool) => void;
   dimensionAxis: DimensionAxis;
@@ -149,12 +236,15 @@ type Props = {
   onUcsAction: (action: UcsAction) => void;
 };
 
+type TooltipCallbacks = {
+  onShowTooltip: (content: TooltipContent, anchor: TooltipAnchor) => void;
+  onHideTooltip: () => void;
+};
+
 type ToolSubmenuProps = Pick<
   Props,
   | 'activeTool'
   | 'onSelectTool'
-  | 'dimensionAxis'
-  | 'onSelectDimensionAxis'
   | 'canCopy'
   | 'onCopy'
   | 'canDelete'
@@ -162,14 +252,16 @@ type ToolSubmenuProps = Pick<
   | 'activeUcsId'
   | 'ucsCreationActive'
   | 'onUcsAction'
-> & {
-  category: Category;
-  visible: boolean;
-  left: number;
-  right: number;
-  bottom: number;
-  onClose: () => void;
-};
+> &
+  TooltipCallbacks & {
+    category: Category;
+    visible: boolean;
+    left: number;
+    right: number;
+    bottom: number;
+    onClose: () => void;
+    onOpenMethods: (tool: ConstructionTool) => void;
+  };
 
 /** Выпадающая панель остаётся смонтированной на время анимации закрытия. */
 function ToolSubmenu({
@@ -180,8 +272,6 @@ function ToolSubmenu({
   bottom,
   activeTool,
   onSelectTool,
-  dimensionAxis,
-  onSelectDimensionAxis,
   canCopy,
   onCopy,
   canDelete,
@@ -190,6 +280,9 @@ function ToolSubmenu({
   ucsCreationActive,
   onUcsAction,
   onClose,
+  onOpenMethods,
+  onShowTooltip,
+  onHideTooltip,
 }: ToolSubmenuProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -205,6 +298,10 @@ function ToolSubmenu({
   }));
 
   const pressItem = (item: MenuItem) => {
+    if (item.kind === 'tool' && isConstructionTool(item.tool)) {
+      onOpenMethods(item.tool);
+      return;
+    }
     if (item.kind === 'ucs') {
       onClose();
       onUcsAction(item.id);
@@ -217,11 +314,7 @@ function ToolSubmenu({
       return;
     }
 
-    const active =
-      item.tool === activeTool && (item.tool !== 'dimension' || item.axis === dimensionAxis);
-    if (item.tool === 'dimension' && item.axis && !active) {
-      onSelectDimensionAxis(item.axis);
-    }
+    const active = item.tool === activeTool;
     onClose();
     onSelectTool(active ? 'none' : item.tool);
   };
@@ -240,9 +333,7 @@ function ToolSubmenu({
           contentContainerStyle={styles.submenuContent}>
           {category.items.map((item) => {
             const active =
-              (item.kind === 'tool' &&
-                item.tool === activeTool &&
-                (item.tool !== 'dimension' || item.axis === dimensionAxis)) ||
+              (item.kind === 'tool' && item.tool === activeTool) ||
               (item.kind === 'ucs' &&
                 ((item.id === 'wcs' && activeUcsId === WCS.id) ||
                   (item.id === 'create' && ucsCreationActive)));
@@ -262,9 +353,12 @@ function ToolSubmenu({
                   : colors.textSecondary;
 
             return (
-              <Pressable
+              <TooltipPressable
                 key={item.id}
                 onPress={() => pressItem(item)}
+                tooltip={getMenuItemTooltip(item)}
+                onShowTooltip={onShowTooltip}
+                onHideTooltip={onHideTooltip}
                 disabled={disabled}
                 accessibilityRole="button"
                 accessibilityLabel={item.label}
@@ -284,7 +378,7 @@ function ToolSubmenu({
                   {item.label}
                 </Text>
                 {active && <View style={styles.toolActiveIndicator} />}
-              </Pressable>
+              </TooltipPressable>
             );
           })}
         </ScrollView>
@@ -294,10 +388,11 @@ function ToolSubmenu({
 }
 
 /**
- * Нижняя CAD-панель: три категории инструментов с выпадающими подменю.
- * Повторное нажатие на активный инструмент снимает выбор, на категорию — закрывает её.
+ * Нижняя CAD-панель: категории, способы построения и подсказки по удержанию.
+ * Длинное нажатие никогда не активирует инструмент или действие.
  */
 export function Toolbar({
+  nativeGesture,
   activeTool,
   onSelectTool,
   dimensionAxis,
@@ -317,18 +412,60 @@ export function Toolbar({
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
-  // Единственный идентификатор открытого меню: две панели одновременно показаться не могут.
+  const barRef = useRef<ViewInstance>(null);
+  // Единственный идентификатор открытого меню: две категории одновременно показаться не могут.
   const [activeCategory, setActiveCategory] = useState<CategoryId | null>(null);
-  // Последняя категория нужна только на 180 мс обратной анимации закрытия.
+  // Последние панели нужны на 180 мс обратной анимации закрытия.
   const [displayedCategory, setDisplayedCategory] = useState<CategoryId>('construction');
+  const [activeMethodTool, setActiveMethodTool] = useState<ConstructionTool | null>(null);
+  const [displayedMethodTool, setDisplayedMethodTool] = useState<ConstructionTool>('point');
+  const [selectedMethodIds, setSelectedMethodIds] =
+    useState<Record<ConstructionTool, string>>(DEFAULT_METHOD_IDS);
+  const [tooltip, setTooltip] = useState<{
+    content: TooltipContent;
+    anchor: TooltipAnchor;
+  } | null>(null);
+
+  const showTooltip = (content: TooltipContent, anchor: TooltipAnchor) => {
+    barRef.current?.measureInWindow((barX, barY) => {
+      setTooltip({
+        content,
+        anchor: { ...anchor, x: anchor.x - barX, y: anchor.y - barY },
+      });
+    });
+  };
+  const hideTooltip = () => setTooltip(null);
 
   const toggleCategory = (id: CategoryId) => {
+    hideTooltip();
+    setActiveMethodTool(null);
     setDisplayedCategory(id);
     setActiveCategory((current) => (current === id ? null : id));
   };
 
+  const openMethods = (tool: ConstructionTool) => {
+    hideTooltip();
+    if (tool === 'dimension') {
+      setSelectedMethodIds((current) => ({ ...current, dimension: dimensionAxis }));
+    }
+    setDisplayedMethodTool(tool);
+    setActiveMethodTool(tool);
+    setActiveCategory(null);
+  };
+
+  const selectMethod = (option: SubMenuOption) => {
+    const tool = displayedMethodTool;
+    setSelectedMethodIds((current) => ({ ...current, [tool]: option.id }));
+    if (!option.implemented) return;
+
+    if (tool === 'dimension' && option.axis) onSelectDimensionAxis(option.axis);
+    onSelectTool(tool);
+    setActiveMethodTool(null);
+  };
+
   return (
     <View
+      ref={barRef}
       style={[styles.bar, { paddingBottom: insets.bottom + TOOLBAR_VERTICAL_PADDING }]}>
       <ToolSubmenu
         category={CATEGORIES[displayedCategory]}
@@ -338,8 +475,6 @@ export function Toolbar({
         bottom={TOOLBAR_HEIGHT + SUBMENU_GAP + insets.bottom}
         activeTool={activeTool}
         onSelectTool={onSelectTool}
-        dimensionAxis={dimensionAxis}
-        onSelectDimensionAxis={onSelectDimensionAxis}
         canCopy={canCopy}
         onCopy={onCopy}
         canDelete={canDelete}
@@ -348,6 +483,23 @@ export function Toolbar({
         ucsCreationActive={ucsCreationActive}
         onUcsAction={onUcsAction}
         onClose={() => setActiveCategory(null)}
+        onOpenMethods={openMethods}
+        onShowTooltip={showTooltip}
+        onHideTooltip={hideTooltip}
+      />
+
+      <SubMenu
+        nativeGesture={nativeGesture}
+        tool={displayedMethodTool}
+        visible={activeMethodTool !== null}
+        selectedMethodId={selectedMethodIds[displayedMethodTool]}
+        left={insets.left + 12}
+        right={insets.right + 12}
+        bottom={TOOLBAR_HEIGHT + SUBMENU_GAP + insets.bottom}
+        onSelect={selectMethod}
+        onClose={() => setActiveMethodTool(null)}
+        onShowTooltip={showTooltip}
+        onHideTooltip={hideTooltip}
       />
 
       <ScrollView
@@ -371,9 +523,12 @@ export function Toolbar({
               : colors.textSecondary;
 
           return (
-            <Pressable
+            <TooltipPressable
               key={id}
               onPress={() => toggleCategory(id)}
+              tooltip={CATEGORY_TOOLTIPS[id]}
+              onShowTooltip={showTooltip}
+              onHideTooltip={hideTooltip}
               accessibilityRole="button"
               accessibilityLabel={`${category.label}, категория инструментов`}
               accessibilityState={{ expanded, selected: containsActiveTool }}
@@ -393,15 +548,22 @@ export function Toolbar({
                 color={color}
               />
               {expanded && <View style={styles.categoryIndicator} />}
-            </Pressable>
+            </TooltipPressable>
           );
         })}
 
         <View style={styles.separator} />
 
         {/* Орто-режим — глобальный переключатель, не прячется в подменю. */}
-        <Pressable
+        <TooltipPressable
           onPress={onToggleOrtho}
+          tooltip={{
+            title: 'Орто-режим',
+            description: 'Ограничивает вторую точку строгой горизонталью или вертикалью.',
+            preview: 'toggle',
+          }}
+          onShowTooltip={showTooltip}
+          onHideTooltip={hideTooltip}
           accessibilityRole="button"
           accessibilityLabel="Орто-режим"
           accessibilityState={{ selected: isOrthoEnabled }}
@@ -416,18 +578,22 @@ export function Toolbar({
             color={isOrthoEnabled ? colors.onPrimary : colors.textSecondary}
           />
           <Text
-            style={[
-              styles.globalButtonText,
-              isOrthoEnabled && styles.buttonTextActive,
-            ]}
+            style={[styles.globalButtonText, isOrthoEnabled && styles.buttonTextActive]}
             numberOfLines={1}>
             Орто
           </Text>
-        </Pressable>
+        </TooltipPressable>
 
         {/* Привязка к сетке тоже остаётся включённой при смене инструмента. */}
-        <Pressable
+        <TooltipPressable
           onPress={onToggleSnapToGrid}
+          tooltip={{
+            title: 'Привязка к сетке',
+            description: 'Привязывает ввод пальцем к узлам сетки с шагом 10 мм.',
+            preview: 'toggle',
+          }}
+          onShowTooltip={showTooltip}
+          onHideTooltip={hideTooltip}
           accessibilityRole="button"
           accessibilityLabel="Привязка к сетке"
           accessibilityState={{ selected: snapToGrid }}
@@ -446,8 +612,10 @@ export function Toolbar({
             numberOfLines={1}>
             Сетка
           </Text>
-        </Pressable>
+        </TooltipPressable>
       </ScrollView>
+
+      {tooltip && <Tooltip content={tooltip.content} anchor={tooltip.anchor} />}
     </View>
   );
 }

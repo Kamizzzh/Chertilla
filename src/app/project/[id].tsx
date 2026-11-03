@@ -2,6 +2,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, BackHandler, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
+import { Gesture } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -183,6 +184,18 @@ export default function ProjectScreen() {
   const { colors, colorScheme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const canvasColors = CANVAS_COLORS[colorScheme];
+  // Один Native-жест связывает прокрутку подменю с жестами холста через внешние отношения RNGH.
+  const submenuNativeGesture = useMemo(
+    () =>
+      Gesture.Native()
+        .onStart(() => {
+          console.log('[SubMenu] native onStart');
+        })
+        .onEnd(() => {
+          console.log('[SubMenu] native onEnd');
+        }),
+    [],
+  );
 
   const [tool, setTool] = useState<Tool>('none');
   // Фигуры чертежа и история действий (Отменить / Вернуть).
@@ -1083,6 +1096,7 @@ export default function ProjectScreen() {
       <View style={styles.canvasArea}>
         <DrawingCanvas
           ref={canvasRef}
+          nativeGesture={submenuNativeGesture}
           tool={tool}
           shapes={shapes}
           canvasColors={canvasColors}
@@ -1341,6 +1355,7 @@ export default function ProjectScreen() {
       </View>
 
       <Toolbar
+        nativeGesture={submenuNativeGesture}
         activeTool={tool}
         onSelectTool={selectTool}
         dimensionAxis={dimensionAxis}
