@@ -201,6 +201,10 @@ export type DrawingCanvasHandle = {
   resetView: () => void;
   /** Убрать первый угол рамки (выделение в два тапа), если он поставлен. Виньетка гаснет. */
   cancelMarquee: () => void;
+  /** Программные манипуляции для DEV-стресс-теста (время в мс). */
+  devZoom: (scale: number, durationMs: number) => void;
+  devPanMm: (dx: number, dy: number, durationMs: number) => void;
+  devResetView: (durationMs: number) => void;
 };
 
 /**
@@ -213,6 +217,8 @@ type Props = {
   ref?: Ref<DrawingCanvasHandle>;
   nativeGesture: SharedNativeGesture;
   tool: Tool;
+  /** Выбранный способ текущего инструмента; нужен, чтобы «Орто» не менял специальные методы. */
+  constructionMethodId: string | null;
   shapes: Shape[];
   canvasColors: CanvasColors;
   activeUCS: UCS;
@@ -245,9 +251,9 @@ type Props = {
   /**
    * Точка, поставленная пальцем: короткий тап или отпускание после долгого нажатия с лупой.
    * Координаты — в мм чертежа, округлены до 0.001. Не вызывается при инструменте «Выделение».
-   * hitSegment — только при инструменте «Размер» и первом тапе: отрезок под пальцем (или null).
+   * hitShape — фигура под пальцем: её используют объектные способы построения и размеры.
    */
-  onTap: (world: Point, hitSegment?: Shape | null) => void;
+  onTap: (world: Point, hitShape?: Shape | null) => void;
   /**
    * Новое выделение при инструменте «Выделение»:
    * тап по фигуре — [её id], тап по пустому месту — [], рамка — все фигуры, которые она задела.
@@ -465,8 +471,10 @@ function addOutlines(path: SkPathBuilder, shapes: Shape[]) {
     } else if (s.type === 'circle') {
       path.addCircle(s.center.x, s.center.y, s.radius);
     } else if (s.type === 'rect') {
-      const b = rectBox(s.p1, s.p2);
-      path.addRect(Skia.XYWHRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0));
+      const corners = rectCorners(s.p1, s.p2, s.angle);
+      path.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < corners.length; i++) path.lineTo(corners[i].x, corners[i].y);
+      path.close();
     } else if (s.type === 'arc') {
       const r = s.radius;
       path.addArc(
@@ -572,7 +580,7 @@ function getVisibleShapes(shapes: Shape[], c: Cover): Shape[] {
       case 'circle':
         return circleTouchesRect(s.center, s.radius, c);
       case 'rect':
-        return rectOutlineTouchesRect(rectBox(s.p1, s.p2), c);
+        return rectOutlineTouchesRect(rectBox(s.p1, s.p2, s.angle), c);
       case 'arc':
         return circleTouchesRect(s.center, s.radius, c) && boxTouchesRect(arcBox(s), c);
       case 'xline': {
@@ -831,18 +839,17 @@ function recordShapes(
       }
       const t = layout.text;
       const w = dimFont ? dimFont.measureText(t.value).width : 0;
-      // Текст не рисуется, если размерная линия на экране короче него (иначе каша).
-      if (dimFont && dimensionLength(s) * k >= w * k) {
-        // Текст рисуется в повёрнутой и «перевёрнутой по Y» системе (внутри матрицы ось Y
-        // смотрит вверх, а буквы Skia растут вниз), центр основания — над серединой линии
-        // на расстоянии 0.3 высоты шрифта (в layout зазор посчитан под DIM_TEXT_HEIGHT_MM).
+      // Текст не рисуется, если размерная линия (или дуга) на экране короче него.
+      const textSpaceMm =
+        s.kind === 'angular'
+          ? (Math.abs(s.offset) * dimensionLength(s) * Math.PI) / 180
+          : dimensionLength(s);
+      if (dimFont && textSpaceMm >= w) {
+        // Текст рисуется в повёрнутой и «перевёрнутой по Y» системе; layout уже задал центр.
         const rad = (t.angle * Math.PI) / 180;
         const lift = dimTextMm * 0.3;
         canvas.save();
-        canvas.translate(
-          (layout.a.x + layout.b.x) / 2 - Math.sin(rad) * lift,
-          (layout.a.y + layout.b.y) / 2 + Math.cos(rad) * lift,
-        );
+        canvas.translate(t.x - Math.sin(rad) * lift, t.y + Math.cos(rad) * lift);
         canvas.rotate(t.angle, 0, 0);
         canvas.scale(1, -1);
         canvas.drawText(t.value, -w / 2, 0, textPaint, dimFont);
@@ -875,11 +882,11 @@ function recordShapes(
         canvas.drawCircle(s.center.x, s.center.y, s.radius, linePaint);
       }
     } else if (s.type === 'rect') {
-      const b = rectBox(s.p1, s.p2);
+      const b = rectBox(s.p1, s.p2, s.angle);
       if (lod && Math.max(b.x1 - b.x0, b.y1 - b.y0) < tinySegmentMm) {
         addScenePoint(pointGroups, color, { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 });
       } else if (lineStyle === 'wavy') {
-        const corners = rectCorners(s.p1, s.p2);
+        const corners = rectCorners(s.p1, s.p2, s.angle);
         const path = Skia.PathBuilder.Make();
         for (let i = 0; i < corners.length; i++) {
           addWavySegment(
@@ -976,12 +983,14 @@ function shapeHandles(s: Shape, k: number): Point[] {
       return [s.point, { x: s.point.x + Math.cos(rad) * len, y: s.point.y + Math.sin(rad) * len }];
     }
     case 'rect':
-      return rectCorners(s.p1, s.p2);
+      return rectCorners(s.p1, s.p2, s.angle);
     case 'arc': {
       const [a, b] = arcEndpoints(s);
       return [s.center, a, b, pointAtAngle(s.center, s.radius, arcMidAngle(s))];
     }
     case 'dimension':
+      if (s.kind === 'angular' && s.p3) return [s.p1, s.p2, s.p3, dimensionOffsetHandle(s)];
+      if (s.kind === 'radius' || s.kind === 'diameter') return [s.p1, s.p2];
       return [s.p1, s.p2, dimensionOffsetHandle(s)];
   }
 }
@@ -1020,22 +1029,12 @@ function moveHandle(s: Shape, index: number, target: Point): Shape | null {
       return { ...s, angle: roundMm((Math.atan2(dy, dx) * 180) / Math.PI) };
     }
     case 'rect': {
-      // Угол уходит за пальцем, противоположный (index + 2) стоит на месте.
-      // Углы 1 и 3 «собраны» из координат p1 и p2 (см. rectCorners).
-      let p1 = s.p1;
-      let p2 = s.p2;
-      if (index === 0) p1 = target;
-      else if (index === 2) p2 = target;
-      else if (index === 1) {
-        p1 = { x: p1.x, y: target.y };
-        p2 = { x: target.x, y: p2.y };
-      } else {
-        p1 = { x: target.x, y: p1.y };
-        p2 = { x: p2.x, y: target.y };
-      }
-      // Нулевая ширина или высота — такой прямоугольник не строим.
-      if (p1.x === p2.x || p1.y === p2.y) return null;
-      return { ...s, p1, p2 };
+      // Противоположный угол и направление сторон остаются на месте, в том числе у повёрнутого.
+      const corners = rectCorners(s.p1, s.p2, s.angle);
+      corners[index] = target;
+      if (Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y) < 0.001) return null;
+      if (Math.hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y) < 0.001) return null;
+      return { ...s, p1: corners[index], p2: corners[(index + 2) % 4] };
     }
     case 'arc': {
       // Центр двигает дугу целиком: радиус и углы не меняются.
@@ -1054,14 +1053,19 @@ function moveHandle(s: Shape, index: number, target: Point): Shape | null {
       return { ...s, startAngle, endAngle };
     }
     case 'dimension': {
-      // Концы p1 и p2 переносятся за пальцем (смещение размерной линии не меняется).
-      if (index === 0 || index === 1) {
+      // Концы и точки лучей переносятся за пальцем, оформление пересчитывается общей функцией.
+      if (index === 0 || index === 1 || (s.kind === 'angular' && index === 2 && s.p3)) {
         const p1 = index === 0 ? target : s.p1;
-        const p2 = index === 0 ? s.p2 : target;
+        const p2 = index === 1 ? target : s.p2;
+        const p3 = index === 2 ? target : s.p3;
         if (p1.x === p2.x && p1.y === p2.y) return null;
-        return { ...s, p1, p2 };
+        if (s.kind === 'angular' && p3 && p1.x === p3.x && p1.y === p3.y) return null;
+        return { ...s, p1, p2, p3 };
       }
-      // Рукоятка размерной линии: смещение — расстояние от p1–p2 до пальца вдоль нормали.
+      if (s.kind === 'angular') {
+        const offset = roundMm(Math.hypot(target.x - s.p1.x, target.y - s.p1.y));
+        return offset > 0 ? { ...s, offset } : null;
+      }
       const n = dimensionNormal(s);
       if (!n) return null;
       return { ...s, offset: roundMm((target.x - s.p1.x) * n.x + (target.y - s.p1.y) * n.y) };
@@ -1142,6 +1146,7 @@ export function DrawingCanvas({
   ref,
   nativeGesture,
   tool,
+  constructionMethodId,
   shapes,
   canvasColors,
   activeUCS,
@@ -1831,6 +1836,30 @@ export function DrawingCanvas({
     cancelMarquee: () => {
       if (marqueePoint1.get()) marqueePoint1.set(null);
     },
+    devZoom: (targetScale: number, durationMs: number) => {
+      interaction.set(1);
+      scale.set(withTiming(clampScale(targetScale), { duration: durationMs }));
+      interaction.set(withDelay(durationMs + INTERACTION_END_DELAY_MS, withTiming(0, { duration: 0 })));
+    },
+    devPanMm: (dx: number, dy: number, durationMs: number) => {
+      const k = safeK(viewport.get());
+      const angle = (ucsSV.get().angle * Math.PI) / 180;
+      const c = Math.cos(angle);
+      const s = Math.sin(angle);
+      const dxPx = k * (c * dx + s * dy);
+      const dyPx = k * (s * dx - c * dy);
+      interaction.set(1);
+      translateX.set(withTiming(translateX.get() + dxPx, { duration: durationMs }));
+      translateY.set(withTiming(translateY.get() + dyPx, { duration: durationMs }));
+      interaction.set(withDelay(durationMs + INTERACTION_END_DELAY_MS, withTiming(0, { duration: 0 })));
+    },
+    devResetView: (durationMs: number) => {
+      interaction.set(1);
+      translateX.set(withTiming(0, { duration: durationMs }));
+      translateY.set(withTiming(0, { duration: durationMs }));
+      scale.set(withTiming(1, { duration: durationMs }));
+      interaction.set(withDelay(durationMs + INTERACTION_END_DELAY_MS, withTiming(0, { duration: 0 })));
+    },
   }));
 
   // Начался пан или щипок — сразу выключаем сглаживание.
@@ -1970,17 +1999,14 @@ export function DrawingCanvas({
       const rawPoint = snapToGrid
         ? { x: snapToGridMm(world.x), y: snapToGridMm(world.y) }
         : { x: roundMm(world.x), y: roundMm(world.y) };
+      const orthoSegment =
+        tool === 'segment' && constructionMethodId === 'twoPoints' && pendingStart;
       const point =
-        pendingStart && (tool === 'segment' || tool === 'xline')
+        (orthoSegment || (tool === 'xline' && pendingStart))
           ? constrainOrthoPoint(pendingStart, rawPoint, isOrthoEnabled)
           : rawPoint;
-      if (tool === 'dimension' && !pendingStart) {
-        // «Размер»: тап по отрезку измеряет весь отрезок (второго тапа не нужно).
-        const segments = shapes.filter((s) => s.type === 'segment');
-        onTap(point, hitTest(segments, world, HIT_TOLERANCE_PX / safeK(vp)));
-        return;
-      }
-      onTap(point);
+      const hit = hitTest(shapes, world, HIT_TOLERANCE_PX / safeK(vp));
+      onTap(point, hit);
     });
 
   // Палец на экране: ищем привязку и запоминаем, куда встанет точка.
@@ -1996,7 +2022,10 @@ export function DrawingCanvas({
       touch.set({ finger: { x, y }, target: snap ? snap.p : worldPoint, snap });
       return;
     }
-    const orthoStart = tool === 'segment' || tool === 'xline' ? pendingStartSV.get() : null;
+    const orthoStart =
+      (tool === 'segment' && constructionMethodId === 'twoPoints') || tool === 'xline'
+        ? pendingStartSV.get()
+        : null;
     const world = orthoStart
       ? constrainOrthoPoint(orthoStart, worldPoint, isOrthoEnabledSV.get())
       : worldPoint;
@@ -2046,7 +2075,8 @@ export function DrawingCanvas({
         scheduleOnRN(setLoupeVisible, false);
         scheduleOnRN(onUcsTap, target);
       } else {
-        scheduleOnRN(onTap, target);
+        const hit = hitTest(shapesSV.get(), target, HIT_TOLERANCE_PX / safeK(viewport.get()));
+        scheduleOnRN(onTap, target, hit);
       }
     })
     .onFinalize(() => {

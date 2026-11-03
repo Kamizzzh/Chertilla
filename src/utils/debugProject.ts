@@ -19,7 +19,7 @@ export const DEBUG_PROJECT_NAMES: Record<DebugLevel, string> = {
   hard: 'Тест (Отладка - Хард)',
 };
 
-/** Отладочный ли это проект (в нём показывается кнопка «PERF»). */
+/** Отладочный ли это проект (служебные уровни «Тест (Отладка)»). */
 export function isDebugProjectName(name: string): boolean {
   return name === DEBUG_PROJECT_NAME || Object.values(DEBUG_PROJECT_NAMES).includes(name);
 }

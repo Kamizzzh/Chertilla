@@ -10,6 +10,7 @@ import {
   dimensionBox,
   nearestOnArc,
   pointAtAngle,
+  rectBox,
   rectCorners,
 } from '@/utils/geometry';
 import { roundMm, type Point } from '@/utils/viewport';
@@ -72,10 +73,11 @@ export function getShapeBBox(shape: Shape): BBox {
     minY = shape.center.y - shape.radius;
     maxY = shape.center.y + shape.radius;
   } else if (shape.type === 'rect') {
-    minX = Math.min(shape.p1.x, shape.p2.x);
-    maxX = Math.max(shape.p1.x, shape.p2.x);
-    minY = Math.min(shape.p1.y, shape.p2.y);
-    maxY = Math.max(shape.p1.y, shape.p2.y);
+    const box = rectBox(shape.p1, shape.p2, shape.angle);
+    minX = box.x0;
+    maxX = box.x1;
+    minY = box.y0;
+    maxY = box.y1;
   } else {
     const box = dimensionBox(shape);
     minX = box.x0;
@@ -257,7 +259,7 @@ export function findSnapPoint(shapes: Shape[], p: Point, tolerance: number): Sna
     } else if (s.type === 'xline') {
       consider(s.point, 'anchor', s.id);
     } else if (s.type === 'rect') {
-      const c = rectCorners(s.p1, s.p2);
+      const c = rectCorners(s.p1, s.p2, s.angle);
       for (let i = 0; i < 4; i++) {
         const a = c[i];
         const b = c[(i + 1) % 4];
@@ -284,7 +286,7 @@ export function findSnapPoint(shapes: Shape[], p: Point, tolerance: number): Sna
     if (s.type === 'segment') {
       addSeg(s.start, s.end, s.id);
     } else if (s.type === 'rect') {
-      const c = rectCorners(s.p1, s.p2);
+      const c = rectCorners(s.p1, s.p2, s.angle);
       for (let i = 0; i < 4; i++) addSeg(c[i], c[(i + 1) % 4], s.id);
     } else if (s.type === 'circle') {
       if (Math.abs(dist(p, s.center) - s.radius) <= tolerance) {
@@ -323,7 +325,7 @@ export function findSnapPoint(shapes: Shape[], p: Point, tolerance: number): Sna
     } else if (s.type === 'xline') {
       consider(projectOnLine(p, s.point, s.angle), 'nearest', s.id);
     } else if (s.type === 'rect') {
-      const c = rectCorners(s.p1, s.p2);
+      const c = rectCorners(s.p1, s.p2, s.angle);
       for (let i = 0; i < 4; i++) {
         consider(projectOnSegment(p, c[i], c[(i + 1) % 4]), 'nearest', s.id);
       }

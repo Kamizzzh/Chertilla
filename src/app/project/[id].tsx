@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, BackHandler, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, BackHandler, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 import { Gesture } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,14 +11,16 @@ import {
   type CoordinateInitial,
   type CoordinateInput,
 } from '@/components/CoordinateModal';
+import { DevPerfModal } from '@/components/DevPerfModal';
 import { DrawingCanvas, type DrawingCanvasHandle, type EditMode } from '@/components/DrawingCanvas';
 import { DivideModal } from '@/components/DivideModal';
 import { ErrorLogModal } from '@/components/ErrorLogModal';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import LineStylePicker from '@/components/LineStylePicker';
-import { PerfMonitor, PerfToggle } from '@/components/PerfMonitor';
+import { PerfToggle } from '@/components/PerfMonitor';
 import { SelectionVignette } from '@/components/SelectionVignette';
 import { SettingsModal } from '@/components/SettingsModal';
+import { DEFAULT_METHOD_IDS, isConstructionTool, type ConstructionTool } from '@/components/SubMenu';
 import { Toolbar } from '@/components/Toolbar';
 import { FLOATING_MARGIN, TopBar } from '@/components/TopBar';
 import { UcsMethodModal, UcsModal } from '@/components/UcsModal';
@@ -32,13 +34,29 @@ import type { UCS, UcsAction, UcsCreationMethod } from '@/types/ucs';
 import { recordAction } from '@/utils/actionHistory';
 import { recordError } from '@/utils/errorLog';
 import { sendFeedback } from '@/utils/feedback';
-import { divideShape, getArcFrom3Points, roundAngle } from '@/utils/geometry';
+import {
+  angleTo,
+  divideShape,
+  getArcFrom3Points,
+  getArcFromCenterStartEnd,
+  getCircleFrom3Points,
+  getCircleFromDiameter,
+  getCircleTangentSegments,
+  getCircleTangentTo3Lines,
+  getInfiniteLine,
+  getLineIntersection,
+  getRectFrom3Points,
+  nearestPointOnLine,
+  nearestPointOnSegment,
+  pointAtAngle,
+  roundAngle,
+} from '@/utils/geometry';
 import { computeIntersection } from '@/utils/intersection';
 import { parseNumber } from '@/utils/number';
 import { shareDrawing, type ExportFormat } from '@/utils/shareExport';
 import { translateShape } from '@/utils/shapeTransform';
 import { getProject, loadProject, saveProject, type ProjectLoadResult } from '@/utils/storage';
-import { WCS } from '@/utils/ucs';
+import { ucsToWorld, WCS, worldToUcs } from '@/utils/ucs';
 import { roundMm, type Point } from '@/utils/viewport';
 
 // Простой счётчик для уникальных id фигур.
@@ -265,6 +283,14 @@ export default function ProjectScreen() {
 
   // Вид размера для инструмента «Размер».
   const [dimensionAxis, setDimensionAxis] = useState<DimensionAxis>('aligned');
+  // Выбранные способы построения и объекты, уже выбранные многоэтапным способом.
+  const [constructionMethodIds, setConstructionMethodIds] =
+    useState<Record<ConstructionTool, string>>(DEFAULT_METHOD_IDS);
+  const [constructionObjectIds, setConstructionObjectIds] = useState<string[]>([]);
+  const [constructionObjectPoints, setConstructionObjectPoints] = useState<Point[]>([]);
+  const [segmentAngleText, setSegmentAngleText] = useState('45');
+  const [circleDiameterText, setCircleDiameterText] = useState('20');
+  const constructionMethodId = isConstructionTool(tool) ? constructionMethodIds[tool] : null;
 
   // У каждого CAD-стиля свой запомненный цвет; null — автоматический чёрный/белый.
   const [lineStyle, setLineStyle] = useState<LineStyle>('solid_thin');
@@ -308,9 +334,8 @@ export default function ProjectScreen() {
   // Сбрасывается вместе с выделением. Если выделенная фигура пропала, режим не действует.
   const [editMode, setEditMode] = useState<EditMode>('none');
   const dragMode = editMode === 'drag' && editTarget !== null;
-  // Монитор производительности (FPS, память). Выключен по умолчанию,
-  // кнопка «PERF» есть в любом проекте.
-  const [perfVisible, setPerfVisible] = useState(false);
+  // Скрытый DEV-стресс-тест: исходный чертёж восстанавливается после проверки.
+  const [devPerfVisible, setDevPerfVisible] = useState(false);
   // Привязка к сетке (шаг 10 мм) для тапа, лупы и рукояток. По умолчанию выключена.
   const [snapToGrid, setSnapToGrid] = useState(false);
   // Орто-режим: вторая точка отрезка или прямой даёт строго горизонтальную/вертикальную линию.
@@ -361,7 +386,9 @@ export default function ProjectScreen() {
       ? intersectPair.map((s) => s.id)
       : tool === 'divide' && divideTarget
         ? [divideTarget.id]
-        : selectedShapeIds;
+        : constructionObjectIds.length > 0
+          ? constructionObjectIds
+          : selectedShapeIds;
 
   /** Убирает недостроенную фигуру (все уже поставленные её точки). */
   const clearPending = () => {
@@ -373,6 +400,8 @@ export default function ProjectScreen() {
     setUcsCreationActive(false);
     setUcsOrigin(null);
     setUcsMethodModalVisible(false);
+    setConstructionObjectIds([]);
+    setConstructionObjectPoints([]);
   };
 
   /** Создаёт обычную точку в выбранном месте пересечения и начинает выбор заново. */
@@ -690,6 +719,11 @@ export default function ProjectScreen() {
     clearPending();
   };
 
+  const selectConstructionMethod = (methodTool: ConstructionTool, methodId: string) => {
+    setConstructionMethodIds((current) => ({ ...current, [methodTool]: methodId }));
+    clearPending();
+  };
+
   const handleToggleSnapToGrid = () => {
     const next = !snapToGrid;
     setSnapToGrid(next);
@@ -865,18 +899,367 @@ export default function ProjectScreen() {
     }, [handleBack]),
   );
 
-  const handleTap = (p: Point, hitSegment?: Shape | null) => {
+  /** Объектные и многотаповые способы из подменю. true — способ обработал тап. */
+  const handleAdvancedConstructionTap = (p: Point, hit: Shape | null): boolean => {
+    if (!constructionMethodId || !isConstructionTool(tool)) return false;
+    const method = constructionMethodId;
+    const reject = (message: string) => Alert.alert('Построение', message);
+    const finish = (shape: Shape) => {
+      addShape(shape);
+      clearPending();
+    };
+    const rememberObject = (shape: Shape) => {
+      setConstructionObjectIds([...constructionObjectIds, shape.id]);
+      setConstructionObjectPoints([...constructionObjectPoints, p]);
+    };
+    const firstObject = shapes.find((s) => s.id === constructionObjectIds[0]) ?? null;
+
+    if (tool === 'point') {
+      if (method === 'intersection') {
+        if (!hit || !getInfiniteLine(hit)) {
+          reject('Коснитесь отрезка или разметочной прямой.');
+          return true;
+        }
+        if (constructionObjectIds.length === 0) {
+          rememberObject(hit);
+          return true;
+        }
+        if (!firstObject || firstObject.id === hit.id) {
+          reject('Выберите вторую, другую линию.');
+          return true;
+        }
+        const a = getInfiniteLine(firstObject);
+        const b = getInfiniteLine(hit);
+        const cross = a && b ? getLineIntersection(a, b) : null;
+        if (!cross) {
+          reject('Линии параллельны или совпадают: одной точки пересечения нет.');
+          return true;
+        }
+        finish({ id: makeId(), ...appearance, type: 'point', p: cross });
+        return true;
+      }
+      if (method === 'center') {
+        if (!hit || (hit.type !== 'circle' && hit.type !== 'arc')) {
+          reject('Коснитесь окружности или дуги.');
+          return true;
+        }
+        finish({
+          id: makeId(),
+          ...appearance,
+          type: 'point',
+          p: { x: roundMm(hit.center.x), y: roundMm(hit.center.y) },
+        });
+        return true;
+      }
+      if (method === 'onObject') {
+        if (!hit || (hit.type !== 'segment' && hit.type !== 'xline')) {
+          reject('Коснитесь отрезка или разметочной прямой.');
+          return true;
+        }
+        const nearest = hit.type === 'segment'
+          ? nearestPointOnSegment(p, hit.start, hit.end)
+          : nearestPointOnLine(p, hit.point, hit.angle);
+        finish({ id: makeId(), ...appearance, type: 'point', p: nearest });
+        return true;
+      }
+      return false;
+    }
+
+    if (tool === 'segment') {
+      if (method === 'horizontal' || method === 'vertical' || method === 'angle') {
+        if (!pendingStart) {
+          setPendingStart(p);
+          return true;
+        }
+        let end: Point;
+        if (method === 'angle') {
+          const angle = parseNumber(segmentAngleText);
+          const length = Math.hypot(p.x - pendingStart.x, p.y - pendingStart.y);
+          if (angle === null || !(length > 0)) {
+            reject('Введите угол и коснитесь второй точки на ненулевом расстоянии.');
+            return true;
+          }
+          end = pointAtAngle(pendingStart, length, activeUCS.angle + angle);
+        } else {
+          const localStart = worldToUcs(pendingStart, activeUCS);
+          const localEnd = worldToUcs(p, activeUCS);
+          end = ucsToWorld(
+            method === 'horizontal'
+              ? { x: localEnd.x, y: localStart.y }
+              : { x: localStart.x, y: localEnd.y },
+            activeUCS,
+          );
+        }
+        end = { x: roundMm(end.x), y: roundMm(end.y) };
+        if (pendingStart.x === end.x && pendingStart.y === end.y) {
+          reject('Нулевая длина отрезка.');
+          return true;
+        }
+        finish({ id: makeId(), ...appearance, type: 'segment', start: pendingStart, end });
+        return true;
+      }
+      if (method === 'tangent') {
+        if (!hit || hit.type !== 'circle') {
+          reject('Коснитесь первой или второй окружности.');
+          return true;
+        }
+        if (constructionObjectIds.length === 0) {
+          rememberObject(hit);
+          return true;
+        }
+        if (!firstObject || firstObject.type !== 'circle' || firstObject.id === hit.id) {
+          reject('Выберите вторую, другую окружность.');
+          return true;
+        }
+        const candidates = getCircleTangentSegments(
+          firstObject.center,
+          firstObject.radius,
+          hit.center,
+          hit.radius,
+        );
+        if (candidates.length === 0) {
+          reject('Общих касательных у этих окружностей нет.');
+          return true;
+        }
+        const firstTap = constructionObjectPoints[0];
+        let best = candidates[0];
+        let bestScore = Infinity;
+        for (const candidate of candidates) {
+          const score =
+            Math.hypot(candidate.start.x - firstTap.x, candidate.start.y - firstTap.y) +
+            Math.hypot(candidate.end.x - p.x, candidate.end.y - p.y);
+          if (score < bestScore) {
+            bestScore = score;
+            best = candidate;
+          }
+        }
+        finish({ id: makeId(), ...appearance, type: 'segment', ...best });
+        return true;
+      }
+      if (method === 'parallel') {
+        if (constructionObjectIds.length === 0) {
+          if (!hit || !getInfiniteLine(hit)) {
+            reject('Сначала коснитесь исходного отрезка или прямой.');
+            return true;
+          }
+          rememberObject(hit);
+          return true;
+        }
+        const source = firstObject ? getInfiniteLine(firstObject) : null;
+        if (!source) {
+          clearPending();
+          reject('Исходная линия больше не существует. Начните заново.');
+          return true;
+        }
+        if (!pendingStart) {
+          setPendingStart(p);
+          return true;
+        }
+        const rad = (source.angle * Math.PI) / 180;
+        const ux = Math.cos(rad);
+        const uy = Math.sin(rad);
+        const length = (p.x - pendingStart.x) * ux + (p.y - pendingStart.y) * uy;
+        if (Math.abs(length) < 0.001) {
+          reject('Коснитесь второй точки, чтобы задать ненулевую длину.');
+          return true;
+        }
+        const end = {
+          x: roundMm(pendingStart.x + ux * length),
+          y: roundMm(pendingStart.y + uy * length),
+        };
+        finish({ id: makeId(), ...appearance, type: 'segment', start: pendingStart, end });
+        return true;
+      }
+      return false;
+    }
+
+    if (tool === 'circle') {
+      if (method === 'centerDiameter') {
+        const diameter = parseNumber(circleDiameterText);
+        if (diameter === null || diameter <= 0) {
+          reject('Введите положительный диаметр в миллиметрах.');
+          return true;
+        }
+        finish({
+          id: makeId(),
+          ...appearance,
+          type: 'circle',
+          center: p,
+          radius: roundMm(diameter / 2),
+        });
+        return true;
+      }
+      if (method === 'twoPoints') {
+        if (!pendingStart) {
+          setPendingStart(p);
+          return true;
+        }
+        const circle = getCircleFromDiameter(pendingStart, p);
+        if (!circle) {
+          reject('Точки диаметра совпадают.');
+          return true;
+        }
+        finish({ id: makeId(), ...appearance, type: 'circle', ...circle });
+        return true;
+      }
+      if (method === 'threePoints') {
+        if (!pendingStart) {
+          setPendingStart(p);
+          return true;
+        }
+        if (!pendingMiddle) {
+          setPendingMiddle(p);
+          return true;
+        }
+        const circle = getCircleFrom3Points(pendingStart, pendingMiddle, p);
+        if (!circle) {
+          reject('Три точки совпадают или лежат на одной прямой.');
+          return true;
+        }
+        finish({ id: makeId(), ...appearance, type: 'circle', ...circle });
+        return true;
+      }
+      if (method === 'tangentThreeLines') {
+        if (!hit || !getInfiniteLine(hit)) {
+          reject('Коснитесь отрезка или разметочной прямой.');
+          return true;
+        }
+        if (constructionObjectIds.includes(hit.id)) {
+          reject('Каждая из трёх линий должна быть отдельной фигурой.');
+          return true;
+        }
+        if (constructionObjectIds.length < 2) {
+          rememberObject(hit);
+          return true;
+        }
+        const selected = [...constructionObjectIds, hit.id]
+          .map((id) => shapes.find((s) => s.id === id))
+          .filter((s): s is Shape => s !== undefined);
+        const lines = selected.map(getInfiniteLine);
+        if (lines.length !== 3 || !lines[0] || !lines[1] || !lines[2]) {
+          reject('Не удалось получить три линии. Начните заново.');
+          return true;
+        }
+        const points = [...constructionObjectPoints, p];
+        const preferred = {
+          x: points.reduce((sum, point) => sum + point.x, 0) / 3,
+          y: points.reduce((sum, point) => sum + point.y, 0) / 3,
+        };
+        const circle = getCircleTangentTo3Lines(lines[0], lines[1], lines[2], preferred);
+        if (!circle) {
+          reject('Для параллельных или совпадающих линий такую окружность построить нельзя.');
+          return true;
+        }
+        finish({ id: makeId(), ...appearance, type: 'circle', ...circle });
+        return true;
+      }
+      return false;
+    }
+
+    if (tool === 'arc' && method === 'centerStartEnd') {
+      if (!pendingStart) {
+        setPendingStart(p);
+        return true;
+      }
+      if (!pendingMiddle) {
+        setPendingMiddle(p);
+        return true;
+      }
+      const arc = getArcFromCenterStartEnd(pendingStart, pendingMiddle, p);
+      if (!arc) {
+        reject('Центр и начало не должны совпадать; углы начала и конца должны отличаться.');
+        return true;
+      }
+      finish({ id: makeId(), ...appearance, type: 'arc', ...arc });
+      return true;
+    }
+
+    if (tool === 'rect' && method === 'threePoints') {
+      if (!pendingStart) {
+        setPendingStart(p);
+        return true;
+      }
+      if (!pendingMiddle) {
+        setPendingMiddle(p);
+        return true;
+      }
+      const rect = getRectFrom3Points(pendingStart, pendingMiddle, p);
+      if (!rect) {
+        reject('Первые две точки должны задать сторону, третья — ненулевую ширину.');
+        return true;
+      }
+      finish({ id: makeId(), ...appearance, type: 'rect', ...rect });
+      return true;
+    }
+
+    if (tool === 'dimension' && method === 'angular') {
+      if (!pendingStart) {
+        setPendingStart(p);
+        return true;
+      }
+      if (!pendingMiddle) {
+        setPendingMiddle(p);
+        return true;
+      }
+      const a = angleTo(pendingStart, pendingMiddle);
+      const b = angleTo(pendingStart, p);
+      if (
+        (pendingStart.x === pendingMiddle.x && pendingStart.y === pendingMiddle.y) ||
+        (pendingStart.x === p.x && pendingStart.y === p.y) ||
+        roundAngle(a - b) === 0
+      ) {
+        reject('Коснитесь вершины и двух разных направлений угла.');
+        return true;
+      }
+      finish({
+        id: makeId(),
+        ...appearance,
+        type: 'dimension',
+        kind: 'angular',
+        p1: pendingStart,
+        p2: pendingMiddle,
+        p3: p,
+        offset: 10,
+        axis: 'aligned',
+      });
+      return true;
+    }
+
+    if (tool === 'dimension' && (method === 'radius' || method === 'diameter')) {
+      if (!hit || (hit.type !== 'circle' && hit.type !== 'arc')) {
+        reject('Коснитесь окружности или дуги.');
+        return true;
+      }
+      const rim = pointAtAngle(hit.center, hit.radius, angleTo(hit.center, p));
+      finish({
+        id: makeId(),
+        ...appearance,
+        type: 'dimension',
+        kind: method,
+        p1: { x: roundMm(hit.center.x), y: roundMm(hit.center.y) },
+        p2: { x: roundMm(rim.x), y: roundMm(rim.y) },
+        offset: 0,
+        axis: 'aligned',
+      });
+      return true;
+    }
+
+    return false;
+  };
+
+  const handleTap = (p: Point, hitShape?: Shape | null) => {
     // При «Выделении» фигуры не создаются (тап обрабатывает холст через onSelectShapes).
     if (tool === 'select') return;
+    if (handleAdvancedConstructionTap(p, hitShape ?? null)) return;
 
     if (tool === 'dimension') {
       // Тап по отрезку — размер его длины (p1, p2 — концы отрезка).
-      if (!pendingStart && hitSegment?.type === 'segment') {
+      if (!pendingStart && hitShape?.type === 'segment') {
         addShape({
           id: makeId(), ...appearance,
           type: 'dimension',
-          p1: hitSegment.start,
-          p2: hitSegment.end,
+          p1: hitShape.start,
+          p2: hitShape.end,
           offset: DEFAULT_DIMENSION_OFFSET_MM,
           axis: dimensionAxis,
         });
@@ -935,10 +1318,18 @@ export default function ProjectScreen() {
         setPendingStart(p);
         return;
       }
-      // Второй угол на одной горизонтали или вертикали с первым — прямоугольник
-      // нулевой ширины или высоты не создаём, ждём другую точку.
-      if (p.x === pendingStart.x || p.y === pendingStart.y) return;
-      addShape({ id: makeId(), ...appearance, type: 'rect', p1: pendingStart, p2: p });
+      // Стороны идут вдоль осей активной СК; в WCS это прежнее поведение.
+      const localStart = worldToUcs(pendingStart, activeUCS);
+      const localEnd = worldToUcs(p, activeUCS);
+      if (localStart.x === localEnd.x || localStart.y === localEnd.y) return;
+      addShape({
+        id: makeId(),
+        ...appearance,
+        type: 'rect',
+        p1: pendingStart,
+        p2: p,
+        angle: roundAngle(activeUCS.angle),
+      });
       setPendingStart(null);
       return;
     }
@@ -1076,6 +1467,41 @@ export default function ProjectScreen() {
   let coordFields: CoordinateFields = 'xy';
   if (tool === 'circle') coordFields = pendingStart ? 'radius' : 'xyRadius';
 
+  let constructionHint: string | null = null;
+  if (tool === 'point' && constructionMethodId === 'intersection') {
+    constructionHint = constructionObjectIds.length === 0 ? 'Пересечение: первая линия' : 'Пересечение: вторая линия';
+  } else if (tool === 'point' && constructionMethodId === 'center') {
+    constructionHint = 'Центр: коснитесь окружности или дуги';
+  } else if (tool === 'point' && constructionMethodId === 'onObject') {
+    constructionHint = 'На объекте: коснитесь отрезка или прямой';
+  } else if (tool === 'segment' && ['horizontal', 'vertical', 'angle'].includes(constructionMethodId ?? '')) {
+    constructionHint = pendingStart ? 'Коснитесь второй точки (длина)' : 'Коснитесь начала отрезка';
+  } else if (tool === 'segment' && constructionMethodId === 'tangent') {
+    constructionHint = constructionObjectIds.length === 0 ? 'Касательный: первая окружность' : 'Касательный: вторая окружность';
+  } else if (tool === 'segment' && constructionMethodId === 'parallel') {
+    constructionHint = constructionObjectIds.length === 0
+      ? 'Параллельный: выберите исходную линию'
+      : pendingStart
+        ? 'Параллельный: конец нового отрезка'
+        : 'Параллельный: начало нового отрезка';
+  } else if (tool === 'circle' && constructionMethodId === 'centerDiameter') {
+    constructionHint = 'Введите диаметр и коснитесь центра';
+  } else if (tool === 'circle' && constructionMethodId === 'twoPoints') {
+    constructionHint = pendingStart ? 'Диаметр: вторая точка' : 'Диаметр: первая точка';
+  } else if (tool === 'circle' && constructionMethodId === 'threePoints') {
+    constructionHint = !pendingStart ? 'Окружность: точка 1 из 3' : !pendingMiddle ? 'Окружность: точка 2 из 3' : 'Окружность: точка 3 из 3';
+  } else if (tool === 'circle' && constructionMethodId === 'tangentThreeLines') {
+    constructionHint = `Касательная: линия ${constructionObjectIds.length + 1} из 3`;
+  } else if (tool === 'arc' && constructionMethodId === 'centerStartEnd') {
+    constructionHint = !pendingStart ? 'Дуга: центр' : !pendingMiddle ? 'Дуга: начало' : 'Дуга: конечное направление';
+  } else if (tool === 'rect' && constructionMethodId === 'threePoints') {
+    constructionHint = !pendingStart ? 'Прямоугольник: первый угол стороны' : !pendingMiddle ? 'Прямоугольник: второй угол стороны' : 'Прямоугольник: ширина (точка 3)';
+  } else if (tool === 'dimension' && constructionMethodId === 'angular') {
+    constructionHint = !pendingStart ? 'Угловой размер: вершина' : !pendingMiddle ? 'Угловой размер: первый луч' : 'Угловой размер: второй луч';
+  } else if (tool === 'dimension' && (constructionMethodId === 'radius' || constructionMethodId === 'diameter')) {
+    constructionHint = constructionMethodId === 'radius' ? 'Радиус: коснитесь окружности или дуги' : 'Диаметр: коснитесь окружности или дуги';
+  }
+
   return (
     <View style={styles.container}>
       <TopBar
@@ -1098,6 +1524,7 @@ export default function ProjectScreen() {
           ref={canvasRef}
           nativeGesture={submenuNativeGesture}
           tool={tool}
+          constructionMethodId={constructionMethodId}
           shapes={shapes}
           canvasColors={canvasColors}
           activeUCS={activeUCS}
@@ -1163,6 +1590,39 @@ export default function ProjectScreen() {
               onChangeAngleText={setAngleText}
               angleInvalid={customAngle === null}
             />
+          )}
+
+          {constructionHint && !ucsCreationActive && (
+            <View style={styles.actionPanel}>
+              <Text style={styles.actionTitle} numberOfLines={2}>{constructionHint}</Text>
+              {tool === 'segment' && constructionMethodId === 'angle' && (
+                <TextInput
+                  value={segmentAngleText}
+                  onChangeText={setSegmentAngleText}
+                  keyboardType="numeric"
+                  placeholder="Угол °"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.methodInput}
+                />
+              )}
+              {tool === 'circle' && constructionMethodId === 'centerDiameter' && (
+                <TextInput
+                  value={circleDiameterText}
+                  onChangeText={setCircleDiameterText}
+                  keyboardType="numeric"
+                  placeholder="⌀ мм"
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.methodInput}
+                />
+              )}
+              <View style={styles.actionButtons}>
+                <Pressable
+                  onPress={clearPending}
+                  style={({ pressed }) => [styles.actionButton, pressed && styles.actionButtonPressed]}>
+                  <Text style={styles.actionButtonText}>Отмена</Text>
+                </Pressable>
+              </View>
+            </View>
           )}
 
           {/* Панель действий с выделенными фигурами — внизу холста, сразу над панелью инструментов.
@@ -1332,7 +1792,7 @@ export default function ProjectScreen() {
           )}
         </View>
 
-        {/* Правый верхний угол холста: кнопка «PERF» и под ней монитор производительности. */}
+        {/* Правый верхний угол холста: скрытая кнопка DEV-стресс-теста. */}
         <View
           pointerEvents="box-none"
           style={[
@@ -1342,8 +1802,14 @@ export default function ProjectScreen() {
               right: insets.right + FLOATING_MARGIN,
             },
           ]}>
-          <PerfToggle active={perfVisible} onPress={() => setPerfVisible((v) => !v)} />
-          {perfVisible && <PerfMonitor />}
+          <PerfToggle
+            active={devPerfVisible}
+            onPress={() => {
+              clearPending();
+              selectShapes([]);
+              setDevPerfVisible(true);
+            }}
+          />
         </View>
 
         {/* Пока проект читается из файла, закрываем холст, чтобы не начать рисовать раньше времени. */}
@@ -1360,6 +1826,7 @@ export default function ProjectScreen() {
         onSelectTool={selectTool}
         dimensionAxis={dimensionAxis}
         onSelectDimensionAxis={selectDimensionAxis}
+        onSelectConstructionMethod={selectConstructionMethod}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={handleToggleSnapToGrid}
         isOrthoEnabled={isOrthoEnabled}
@@ -1371,6 +1838,16 @@ export default function ProjectScreen() {
         activeUcsId={activeUcsId}
         ucsCreationActive={ucsCreationActive}
         onUcsAction={handleUcsAction}
+      />
+
+      <DevPerfModal
+        visible={devPerfVisible}
+        shapes={shapes}
+        onApplyShapes={setShapes}
+        onResetView={() => canvasRef.current?.devResetView(250)}
+        onZoom={(targetScale, durationMs) => canvasRef.current?.devZoom(targetScale, durationMs)}
+        onPanMm={(dx, dy, durationMs) => canvasRef.current?.devPanMm(dx, dy, durationMs)}
+        onClose={() => setDevPerfVisible(false)}
       />
 
       <DivideModal
@@ -1508,6 +1985,17 @@ const createStyles = (colors: ThemeColors) =>
       fontSize: 13,
       fontWeight: '600',
       color: colors.accentText,
+    },
+    methodInput: {
+      minHeight: 42,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+      backgroundColor: colors.background,
+      color: colors.text,
+      fontSize: 16,
     },
     actionButtons: {
       flexDirection: 'row',

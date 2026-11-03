@@ -50,7 +50,7 @@ function distanceToShape(s: Shape, p: Point): number {
   }
   if (s.type === 'rect') {
     // Прямоугольник — это 4 стороны: тап внутри далеко от сторон его не выбирает.
-    const c = rectCorners(s.p1, s.p2);
+    const c = rectCorners(s.p1, s.p2, s.angle);
     let best = Infinity;
     for (let i = 0; i < 4; i++) best = Math.min(best, distToSegment(p, c[i], c[(i + 1) % 4]));
     return best;
@@ -123,7 +123,7 @@ function shapeTouchesRect(s: Shape, r: Box): boolean {
     };
     return rectsOverlap(box, r);
   }
-  if (s.type === 'rect') return rectsOverlap(rectBox(s.p1, s.p2), r);
+  if (s.type === 'rect') return rectsOverlap(rectBox(s.p1, s.p2, s.angle), r);
   if (s.type === 'arc') return rectsOverlap(arcBox(s), r);
   if (s.type === 'dimension') return rectsOverlap(dimensionBox(s), r);
   const corners: Point[] = [

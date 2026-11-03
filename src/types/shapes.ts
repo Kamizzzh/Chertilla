@@ -30,6 +30,9 @@ export type Tool =
 /** Вид линейного размера: вдоль p1–p2, по разности X или по разности Y. */
 export type DimensionAxis = 'aligned' | 'x' | 'y';
 
+/** Вид размера. Отсутствие kind в старых проектах означает обычный линейный размер. */
+export type DimensionKind = 'linear' | 'angular' | 'radius' | 'diameter';
+
 export type XLineMode = 'axisX' | 'axisY' | 'angle' | 'twoPoints';
 
 export type LineStyle =
@@ -77,12 +80,16 @@ export type XLineShape = ShapeAppearance & {
   angle: number;
 };
 
-/** Прямоугольник со сторонами вдоль осей: p1 и p2 — противоположные углы (в любом порядке). */
+/**
+ * Прямоугольник: p1 и p2 — противоположные углы (в любом порядке).
+ * angle — направление стороны от p1 к соседнему углу, градусы; у старых фигур без него 0°.
+ */
 export type RectShape = ShapeAppearance & {
   id: string;
   type: 'rect';
   p1: Point;
   p2: Point;
+  angle?: number;
 };
 
 /**
@@ -106,11 +113,18 @@ export type ArcShape = ShapeAppearance & {
 export type DimensionShape = ShapeAppearance & {
   id: string;
   type: 'dimension';
+  /** Угловой: вершина; радиус/диаметр: центр окружности; линейный: первая точка. */
   p1: Point;
+  /** Угловой: точка первого луча; радиус/диаметр: точка окружности; линейный: вторая точка. */
   p2: Point;
+  /** Только угловой размер: точка второго луча. */
+  p3?: Point;
+  /** Линейный: смещение линии; угловой: радиус дуги оформления, мм. */
   offset: number;
-  /** 'aligned' (по умолчанию) — длина p1–p2; 'x' — |Δx|, линия горизонтальна; 'y' — |Δy|, линия вертикальна. */
+  /** 'aligned' (по умолчанию) — длина p1–p2; 'x' — |Δx|; 'y' — |Δy|. */
   axis: DimensionAxis;
+  /** Отсутствует в старых JSON — такой размер линейный. */
+  kind?: DimensionKind;
 };
 
 export type Shape =

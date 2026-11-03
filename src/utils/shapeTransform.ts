@@ -39,6 +39,7 @@ export function translateShape(shape: Shape, dx: number, dy: number): Shape {
         ...shape,
         p1: translatePoint(shape.p1, dx, dy),
         p2: translatePoint(shape.p2, dx, dy),
+        p3: shape.p3 ? translatePoint(shape.p3, dx, dy) : undefined,
       };
   }
 }

@@ -45,7 +45,7 @@ function shapeToPairs(shape: Shape): Pairs {
   switch (shape.type) {
     case 'rect': {
       // Четыре стороны — четыре LINE (замкнутой полилинии LWPOLYLINE в R12 ещё нет).
-      const c = rectCorners(shape.p1, shape.p2);
+      const c = rectCorners(shape.p1, shape.p2, shape.angle);
       return c.flatMap((a, i) => linePairs(a, c[(i + 1) % 4]));
     }
     case 'dimension': {
@@ -63,7 +63,7 @@ function shapeToPairs(shape: Shape): Pairs {
         [20, t.y],
         [30, 0],
         [40, t.height],
-        [1, t.value],
+        [1, t.value.replace('⌀', '%%c').replace('°', '%%d')],
         [50, t.angle],
         [72, '1'],
         [11, t.x],

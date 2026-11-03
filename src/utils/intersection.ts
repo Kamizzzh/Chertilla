@@ -46,7 +46,7 @@ function shapePrims(s: Shape): Prim[] {
   'worklet';
   if (s.type === 'segment') return [{ type: 'line', a: s.start, b: s.end, infinite: false }];
   if (s.type === 'rect') {
-    const c = rectCorners(s.p1, s.p2);
+    const c = rectCorners(s.p1, s.p2, s.angle);
     const sides: Prim[] = [];
     for (let i = 0; i < 4; i++) {
       sides.push({ type: 'line', a: c[i], b: c[(i + 1) % 4], infinite: false });

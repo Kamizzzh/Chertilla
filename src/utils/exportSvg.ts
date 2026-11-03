@@ -11,6 +11,7 @@ import {
   dimensionBox,
   dimensionLayout,
   rectBox,
+  rectCorners,
 } from '@/utils/geometry';
 import { formatExportNumber as n } from '@/utils/number';
 
@@ -57,10 +58,12 @@ function getBounds(shapes: Shape[]): Box {
       case 'xline':
         add(shape.point.x, shape.point.y);
         break;
-      case 'rect':
-        add(shape.p1.x, shape.p1.y);
-        add(shape.p2.x, shape.p2.y);
+      case 'rect': {
+        const b = rectBox(shape.p1, shape.p2, shape.angle);
+        add(b.x0, b.y0);
+        add(b.x1, b.y1);
         break;
+      }
       case 'arc': {
         const b = arcBox(shape);
         add(b.x0, b.y0);
@@ -106,8 +109,10 @@ function shapeToSvg(shape: Shape, box: Box, pointRadius: number): string {
       return `<line x1="${n(shape.point.x - dx)}" y1="${n(shape.point.y - dy)}" x2="${n(shape.point.x + dx)}" y2="${n(shape.point.y + dy)}"/>`;
     }
     case 'rect': {
-      const b = rectBox(shape.p1, shape.p2);
-      return `<rect x="${n(b.x0)}" y="${n(b.y0)}" width="${n(b.x1 - b.x0)}" height="${n(b.y1 - b.y0)}"/>`;
+      const points = rectCorners(shape.p1, shape.p2, shape.angle)
+        .map((p) => `${n(p.x)},${n(p.y)}`)
+        .join(' ');
+      return `<polygon points="${points}"/>`;
     }
     case 'arc': {
       // Дуга SVG: от начала до конца радиусом r. Флаг «большая дуга» — если дуга больше 180°.
@@ -152,7 +157,7 @@ export function exportToSvg(shapes: Shape[]): string {
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">`,
     // vector-effect не наследуется от группы, поэтому задаём его стилем сразу всем фигурам.
-    '<style>line, circle, rect, path { vector-effect: non-scaling-stroke; }</style>',
+    '<style>line, circle, rect, path, polygon { vector-effect: non-scaling-stroke; }</style>',
     `<rect x="${n(box.minX)}" y="${n(-box.maxY)}" width="${n(width)}" height="${n(height)}" fill="#FFFFFF"/>`,
     '<g transform="scale(1, -1)" fill="none" stroke="#000000" stroke-width="1">',
     ...shapes.map((shape) => shapeToSvg(shape, box, pointRadius)),

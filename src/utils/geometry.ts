@@ -5,7 +5,14 @@
 // и экран в JS-потоке. Вызываемая функция объявлена ВЫШЕ вызывающей — иначе в UI-потоке
 // она окажется undefined (см. CLAUDE.md).
 
-import type { ArcShape, DimensionShape, Shape } from '@/types/shapes';
+import type {
+  ArcShape,
+  CircleShape,
+  DimensionShape,
+  RectShape,
+  SegmentShape,
+  Shape,
+} from '@/types/shapes';
 import { roundMm, type Point } from '@/utils/viewport';
 
 /** Параметры дуги без id и типа: центр, радиус, начальный и конечный углы. */
@@ -154,28 +161,79 @@ export function nearestOnArc(p: Point, arc: ArcParams): Point {
   return Math.hypot(p.x - a.x, p.y - a.y) <= Math.hypot(p.x - b.x, p.y - b.y) ? a : b;
 }
 
-/**
- * Углы прямоугольника по порядку обхода: [p1, (p2.x; p1.y), p2, (p1.x; p2.y)].
- * Соседние в массиве углы соединены стороной, углы 0 и 2 (1 и 3) — противоположные.
- */
-export function rectCorners(p1: Point, p2: Point): Point[] {
+/** Вектор (x, y), повёрнутый на deg против часовой. */
+function rotateVector(x: number, y: number, deg: number): Point {
   'worklet';
-  return [p1, { x: p2.x, y: p1.y }, p2, { x: p1.x, y: p2.y }];
+  const rad = (deg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return { x: c * x - s * y, y: s * x + c * y };
 }
 
-/** Габарит прямоугольника с противоположными углами p1 и p2. */
-export function rectBox(p1: Point, p2: Point): Box {
+/**
+ * Углы прямоугольника по порядку обхода. p1 и p2 — фактические противоположные углы,
+ * angle — направление первой стороны. Без angle получается прежний прямоугольник вдоль осей.
+ */
+export function rectCorners(p1: Point, p2: Point, angle?: number): Point[] {
   'worklet';
+  const rotation = angle ?? 0;
+  const center = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  const localDiagonal = rotateVector(p2.x - p1.x, p2.y - p1.y, -rotation);
+  const hx = localDiagonal.x / 2;
+  const hy = localDiagonal.y / 2;
+  const local = [
+    { x: -hx, y: -hy },
+    { x: hx, y: -hy },
+    { x: hx, y: hy },
+    { x: -hx, y: hy },
+  ];
+  return local.map((p) => {
+    const rotated = rotateVector(p.x, p.y, rotation);
+    return { x: center.x + rotated.x, y: center.y + rotated.y };
+  });
+}
+
+/** Габарит прямоугольника, включая повёрнутый вариант. */
+export function rectBox(p1: Point, p2: Point, angle?: number): Box {
+  'worklet';
+  const corners = rectCorners(p1, p2, angle);
   return {
-    x0: Math.min(p1.x, p2.x),
-    y0: Math.min(p1.y, p2.y),
-    x1: Math.max(p1.x, p2.x),
-    y1: Math.max(p1.y, p2.y),
+    x0: Math.min(...corners.map((p) => p.x)),
+    y0: Math.min(...corners.map((p) => p.y)),
+    x1: Math.max(...corners.map((p) => p.x)),
+    y1: Math.max(...corners.map((p) => p.y)),
+  };
+}
+
+/** Прямоугольник по стороне p1–p2 и третьей точке на противоположной стороне. */
+export function getRectFrom3Points(
+  p1: Point,
+  p2: Point,
+  p3: Point,
+): Pick<RectShape, 'p1' | 'p2' | 'angle'> | null {
+  'worklet';
+  const width = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  if (!(width > 0)) return null;
+  const ux = (p2.x - p1.x) / width;
+  const uy = (p2.y - p1.y) / width;
+  const height = -(p3.x - p1.x) * uy + (p3.y - p1.y) * ux;
+  if (Math.abs(height) < 0.001) return null;
+  const opposite = {
+    x: roundMm(p2.x - uy * height),
+    y: roundMm(p2.y + ux * height),
+  };
+  return {
+    p1: { x: roundMm(p1.x), y: roundMm(p1.y) },
+    p2: opposite,
+    angle: roundAngle(angleTo(p1, p2)),
   };
 }
 
 /** Параметры размера без id и типа: измеряемые точки, смещение размерной линии и вид размера. */
-export type DimensionParams = Pick<DimensionShape, 'p1' | 'p2' | 'offset' | 'axis'>;
+export type DimensionParams = Pick<
+  DimensionShape,
+  'p1' | 'p2' | 'p3' | 'offset' | 'axis' | 'kind'
+>;
 
 // Оформление размера — в мм чертежа (масштабируется вместе с зумом, как в CAD).
 export const DIM_TEXT_HEIGHT_MM = 3.5; // высота шрифта
@@ -196,12 +254,30 @@ export type DimensionLayout = {
   b: Point;
 };
 
-/** Измеряемая длина, мм: 'aligned' — расстояние p1–p2, 'x' — |Δx|, 'y' — |Δy|. */
+/** Начальный и конечный углы меньшей дуги между двумя лучами. */
+function angularDimensionAngles(d: DimensionParams): { start: number; end: number; sweep: number } | null {
+  'worklet';
+  if (!d.p3 || (d.p1.x === d.p2.x && d.p1.y === d.p2.y) || (d.p1.x === d.p3.x && d.p1.y === d.p3.y)) {
+    return null;
+  }
+  const a = angleTo(d.p1, d.p2);
+  const b = angleTo(d.p1, d.p3);
+  const ccw = normalizeAngle(b - a);
+  return ccw <= 180
+    ? { start: a, end: b, sweep: ccw }
+    : { start: b, end: a, sweep: 360 - ccw };
+}
+
+/** Измеряемая величина: мм для длин, градусы для угла. */
 export function dimensionLength(d: DimensionParams): number {
   'worklet';
+  if (d.kind === 'angular') return angularDimensionAngles(d)?.sweep ?? 0;
+  const radius = Math.hypot(d.p2.x - d.p1.x, d.p2.y - d.p1.y);
+  if (d.kind === 'radius') return radius;
+  if (d.kind === 'diameter') return radius * 2;
   if (d.axis === 'x') return Math.abs(d.p2.x - d.p1.x);
   if (d.axis === 'y') return Math.abs(d.p2.y - d.p1.y);
-  return Math.hypot(d.p2.x - d.p1.x, d.p2.y - d.p1.y);
+  return radius;
 }
 
 /** Единичный вектор вдоль размерной линии (от a к b) или null, если измерять нечего. */
@@ -238,6 +314,13 @@ function dimensionLineEnds(d: DimensionParams): { a: Point; b: Point } | null {
   const n = dimensionNormal(d);
   if (!u || !n) return null;
   const len = dimensionLength(d);
+  if (d.kind === 'radius') return { a: d.p1, b: d.p2 };
+  if (d.kind === 'diameter') {
+    return {
+      a: { x: d.p1.x * 2 - d.p2.x, y: d.p1.y * 2 - d.p2.y },
+      b: d.p2,
+    };
+  }
   const a = { x: d.p1.x + n.x * d.offset, y: d.p1.y + n.y * d.offset };
   return { a, b: { x: a.x + u.x * len, y: a.y + u.y * len } };
 }
@@ -245,6 +328,12 @@ function dimensionLineEnds(d: DimensionParams): { a: Point; b: Point } | null {
 /** Где рукоятка смещения размера: середина размерной линии. */
 export function dimensionOffsetHandle(d: DimensionParams): Point {
   'worklet';
+  if (d.kind === 'angular') {
+    const angles = angularDimensionAngles(d);
+    if (angles) {
+      return pointAtAngle(d.p1, Math.abs(d.offset), angles.start + angles.sweep / 2);
+    }
+  }
   const ends = dimensionLineEnds(d);
   if (!ends) return { x: (d.p1.x + d.p2.x) / 2, y: (d.p1.y + d.p2.y) / 2 };
   return { x: (ends.a.x + ends.b.x) / 2, y: (ends.a.y + ends.b.y) / 2 };
@@ -253,6 +342,23 @@ export function dimensionOffsetHandle(d: DimensionParams): Point {
 /** Габарит размера: измеряемые точки и концы размерной линии (текст не учитывается). */
 export function dimensionBox(d: DimensionParams): Box {
   'worklet';
+  if (d.kind === 'angular') {
+    const angles = angularDimensionAngles(d);
+    if (angles) {
+      const arc = arcBox({
+        center: d.p1,
+        radius: Math.abs(d.offset),
+        startAngle: angles.start,
+        endAngle: angles.end,
+      });
+      return {
+        x0: Math.min(d.p1.x, d.p2.x, d.p3?.x ?? d.p2.x, arc.x0),
+        y0: Math.min(d.p1.y, d.p2.y, d.p3?.y ?? d.p2.y, arc.y0),
+        x1: Math.max(d.p1.x, d.p2.x, d.p3?.x ?? d.p2.x, arc.x1),
+        y1: Math.max(d.p1.y, d.p2.y, d.p3?.y ?? d.p2.y, arc.y1),
+      };
+    }
+  }
   const ends = dimensionLineEnds(d);
   const a = ends ? ends.a : d.p1;
   const b = ends ? ends.b : d.p2;
@@ -271,6 +377,58 @@ export function dimensionBox(d: DimensionParams): Box {
 export function dimensionLayout(d: DimensionParams): DimensionLayout | null {
   'worklet';
   const len = dimensionLength(d);
+  if (d.kind === 'angular') {
+    const angles = angularDimensionAngles(d);
+    const radius = Math.abs(d.offset);
+    if (!angles || !(angles.sweep > 0) || !(radius > 0)) return null;
+    const a = pointAtAngle(d.p1, radius, angles.start);
+    const b = pointAtAngle(d.p1, radius, angles.end);
+    const lines: [Point, Point][] = [
+      [d.p1, a],
+      [d.p1, b],
+    ];
+    const steps = Math.max(2, Math.ceil(angles.sweep / 10));
+    for (let i = 0; i < steps; i++) {
+      lines.push([
+        pointAtAngle(d.p1, radius, angles.start + (angles.sweep * i) / steps),
+        pointAtAngle(d.p1, radius, angles.start + (angles.sweep * (i + 1)) / steps),
+      ]);
+    }
+    const arrowLength = Math.min(DIM_ARROW_MM, (radius * angles.sweep * Math.PI) / 720);
+    const arrowWidth = arrowLength * DIM_ARROW_WIDTH_RATIO;
+    for (const [tip, deg, direction] of [
+      [a, angles.start, 1],
+      [b, angles.end, -1],
+    ] as const) {
+      const rad = (deg * Math.PI) / 180;
+      const tangent = { x: -Math.sin(rad) * direction, y: Math.cos(rad) * direction };
+      const normal = { x: Math.cos(rad), y: Math.sin(rad) };
+      const base = {
+        x: tip.x + tangent.x * arrowLength,
+        y: tip.y + tangent.y * arrowLength,
+      };
+      lines.push([tip, { x: base.x + normal.x * arrowWidth, y: base.y + normal.y * arrowWidth }]);
+      lines.push([tip, { x: base.x - normal.x * arrowWidth, y: base.y - normal.y * arrowWidth }]);
+    }
+    const mid = angles.start + angles.sweep / 2;
+    const textPoint = pointAtAngle(d.p1, radius + DIM_TEXT_GAP_MM, mid);
+    let textAngle = normalizeAngle(mid + 90);
+    if (textAngle > 180) textAngle -= 360;
+    if (textAngle > 90) textAngle -= 180;
+    else if (textAngle <= -90) textAngle += 180;
+    return {
+      lines,
+      text: {
+        value: `${roundMm(angles.sweep)}°`,
+        x: textPoint.x,
+        y: textPoint.y,
+        angle: textAngle,
+        height: DIM_TEXT_HEIGHT_MM,
+      },
+      a,
+      b,
+    };
+  }
   const u = dimensionAlong(d);
   const n = dimensionNormal(d);
   const ends = dimensionLineEnds(d);
@@ -278,30 +436,30 @@ export function dimensionLayout(d: DimensionParams): DimensionLayout | null {
   const { a, b } = ends;
   const lines: [Point, Point][] = [];
 
-  // Выносные линии: от точки (с зазором) до размерной линии и чуть дальше.
-  for (const [p, q] of [
-    [d.p1, a],
-    [d.p2, b],
-  ]) {
-    const dist = Math.hypot(q.x - p.x, q.y - p.y);
-    if (!(dist > 0)) continue;
-    const ex = (q.x - p.x) / dist;
-    const ey = (q.y - p.y) / dist;
-    const gap = Math.min(DIM_EXT_GAP_MM, dist / 2);
-    lines.push([
-      { x: p.x + ex * gap, y: p.y + ey * gap },
-      { x: q.x + ex * DIM_EXT_OVERSHOOT_MM, y: q.y + ey * DIM_EXT_OVERSHOOT_MM },
-    ]);
+  // Выносные линии нужны только линейному размеру; радиус и диаметр идут от центра/окружности.
+  if (d.kind !== 'radius' && d.kind !== 'diameter') {
+    for (const [p, q] of [
+      [d.p1, a],
+      [d.p2, b],
+    ]) {
+      const dist = Math.hypot(q.x - p.x, q.y - p.y);
+      if (!(dist > 0)) continue;
+      const ex = (q.x - p.x) / dist;
+      const ey = (q.y - p.y) / dist;
+      const gap = Math.min(DIM_EXT_GAP_MM, dist / 2);
+      lines.push([
+        { x: p.x + ex * gap, y: p.y + ey * gap },
+        { x: q.x + ex * DIM_EXT_OVERSHOOT_MM, y: q.y + ey * DIM_EXT_OVERSHOOT_MM },
+      ]);
+    }
   }
 
   // Размерная линия и стрелки на её концах (острие — в a и b).
   lines.push([a, b]);
   const al = Math.min(DIM_ARROW_MM, len / 4);
   const aw = al * DIM_ARROW_WIDTH_RATIO;
-  for (const [tip, dir] of [
-    [a, 1],
-    [b, -1],
-  ] as const) {
+  const arrowTips: [Point, number][] = d.kind === 'radius' ? [[b, -1]] : [[a, 1], [b, -1]];
+  for (const [tip, dir] of arrowTips) {
     const bx0 = tip.x + u.x * al * dir;
     const by0 = tip.y + u.y * al * dir;
     lines.push([tip, { x: bx0 + n.x * aw, y: by0 + n.y * aw }]);
@@ -318,7 +476,7 @@ export function dimensionLayout(d: DimensionParams): DimensionLayout | null {
   return {
     lines,
     text: {
-      value: String(roundMm(len)),
+      value: `${d.kind === 'radius' ? 'R' : d.kind === 'diameter' ? '⌀' : ''}${roundMm(len)}`,
       x: (a.x + b.x) / 2 - Math.sin(rad) * lift,
       y: (a.y + b.y) / 2 + Math.cos(rad) * lift,
       angle,
@@ -374,4 +532,242 @@ export function getArcFrom3Points(p1: Point, p2: Point, p3: Point): ArcParams | 
   if (startAngle === endAngle || r <= 0) return null;
 
   return { center: { x: roundMm(center.x), y: roundMm(center.y) }, radius: r, startAngle, endAngle };
+}
+
+/** Окружность по двум противоположным концам диаметра. */
+export function getCircleFromDiameter(
+  p1: Point,
+  p2: Point,
+): Pick<CircleShape, 'center' | 'radius'> | null {
+  'worklet';
+  const radius = roundMm(Math.hypot(p2.x - p1.x, p2.y - p1.y) / 2);
+  if (!(radius > 0)) return null;
+  return {
+    center: { x: roundMm((p1.x + p2.x) / 2), y: roundMm((p1.y + p2.y) / 2) },
+    radius,
+  };
+}
+
+/** Описанная окружность через три точки; null — точки совпадают или коллинеарны. */
+export function getCircleFrom3Points(
+  p1: Point,
+  p2: Point,
+  p3: Point,
+): Pick<CircleShape, 'center' | 'radius'> | null {
+  'worklet';
+  const arc = getArcFrom3Points(p1, p2, p3);
+  return arc ? { center: arc.center, radius: arc.radius } : null;
+}
+
+/** Дуга от начального направления к конечному против часовой; конец задаёт только угол. */
+export function getArcFromCenterStartEnd(center: Point, start: Point, end: Point): ArcParams | null {
+  'worklet';
+  const radius = roundMm(Math.hypot(start.x - center.x, start.y - center.y));
+  if (!(radius > 0) || (center.x === end.x && center.y === end.y)) return null;
+  const startAngle = roundAngle(angleTo(center, start));
+  const endAngle = roundAngle(angleTo(center, end));
+  if (startAngle === endAngle) return null;
+  return {
+    center: { x: roundMm(center.x), y: roundMm(center.y) },
+    radius,
+    startAngle,
+    endAngle,
+  };
+}
+
+/** Ближайшая точка отрезка; вырожденный отрезок даёт его начало. */
+export function nearestPointOnSegment(p: Point, a: Point, b: Point): Point {
+  'worklet';
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length2 = dx * dx + dy * dy;
+  if (!(length2 > 0)) return { x: roundMm(a.x), y: roundMm(a.y) };
+  const t = Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2));
+  return { x: roundMm(a.x + dx * t), y: roundMm(a.y + dy * t) };
+}
+
+/** Ближайшая точка бесконечной прямой. */
+export function nearestPointOnLine(p: Point, point: Point, angle: number): Point {
+  'worklet';
+  const rad = (angle * Math.PI) / 180;
+  const ux = Math.cos(rad);
+  const uy = Math.sin(rad);
+  const t = (p.x - point.x) * ux + (p.y - point.y) * uy;
+  return { x: roundMm(point.x + ux * t), y: roundMm(point.y + uy * t) };
+}
+
+export type InfiniteLineParams = { point: Point; angle: number };
+
+/** Отрезок или разметочная прямая как бесконечная линия. Другие фигуры — null. */
+export function getInfiniteLine(shape: Shape): InfiniteLineParams | null {
+  'worklet';
+  if (shape.type === 'segment') {
+    if (shape.start.x === shape.end.x && shape.start.y === shape.end.y) return null;
+    return { point: shape.start, angle: angleTo(shape.start, shape.end) };
+  }
+  if (shape.type === 'xline') return { point: shape.point, angle: shape.angle };
+  return null;
+}
+
+/** Пересечение двух бесконечных линий; параллельные и совпадающие — null. */
+export function getLineIntersection(a: InfiniteLineParams, b: InfiniteLineParams): Point | null {
+  'worklet';
+  const ar = (a.angle * Math.PI) / 180;
+  const br = (b.angle * Math.PI) / 180;
+  const rx = Math.cos(ar);
+  const ry = Math.sin(ar);
+  const sx = Math.cos(br);
+  const sy = Math.sin(br);
+  const denominator = rx * sy - ry * sx;
+  if (Math.abs(denominator) < 1e-9) return null;
+  const qx = b.point.x - a.point.x;
+  const qy = b.point.y - a.point.y;
+  const t = (qx * sy - qy * sx) / denominator;
+  return { x: roundMm(a.point.x + t * rx), y: roundMm(a.point.y + t * ry) };
+}
+
+/** Общие касательные к двум окружностям: до четырёх отрезков между точками касания. */
+export function getCircleTangentSegments(
+  c1: Point,
+  r1: number,
+  c2: Point,
+  r2: number,
+): Pick<SegmentShape, 'start' | 'end'>[] {
+  'worklet';
+  const dx = c2.x - c1.x;
+  const dy = c2.y - c1.y;
+  const distance = Math.hypot(dx, dy);
+  if (!(distance > 0) || !(r1 > 0) || !(r2 > 0)) return [];
+  const ux = dx / distance;
+  const uy = dy / distance;
+  const result: Pick<SegmentShape, 'start' | 'end'>[] = [];
+  for (const [s1, s2] of [
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
+  ] as const) {
+    const signedRadius = s1 * r1 - s2 * r2;
+    const ratio = signedRadius / distance;
+    if (Math.abs(ratio) > 1 + 1e-9) continue;
+    const along = Math.max(-1, Math.min(1, ratio));
+    const across = Math.sqrt(Math.max(0, 1 - along * along));
+    for (const side of [-1, 1]) {
+      const nx = along * ux - side * across * uy;
+      const ny = along * uy + side * across * ux;
+      const start = {
+        x: roundMm(c1.x + s1 * r1 * nx),
+        y: roundMm(c1.y + s1 * r1 * ny),
+      };
+      const end = {
+        x: roundMm(c2.x + s2 * r2 * nx),
+        y: roundMm(c2.y + s2 * r2 * ny),
+      };
+      if (start.x === end.x && start.y === end.y) continue;
+      const duplicate = result.some(
+        (item) =>
+          Math.hypot(item.start.x - start.x, item.start.y - start.y) < 0.001 &&
+          Math.hypot(item.end.x - end.x, item.end.y - end.y) < 0.001,
+      );
+      if (!duplicate) result.push({ start, end });
+    }
+  }
+  return result;
+}
+
+/** Решение линейной системы 3×3. Используется для центра и радиуса касательной окружности. */
+function solve3(
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+  g: number,
+  h: number,
+  i: number,
+  r1: number,
+  r2: number,
+  r3: number,
+): [number, number, number] | null {
+  'worklet';
+  const determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(determinant) < 1e-10) return null;
+  const x =
+    (r1 * (e * i - f * h) - b * (r2 * i - f * r3) + c * (r2 * h - e * r3)) /
+    determinant;
+  const y =
+    (a * (r2 * i - f * r3) - r1 * (d * i - f * g) + c * (d * r3 - r2 * g)) /
+    determinant;
+  const z =
+    (a * (e * r3 - r2 * h) - b * (d * r3 - r2 * g) + r1 * (d * h - e * g)) /
+    determinant;
+  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x, y, z] : null;
+}
+
+/**
+ * Окружность, касательная трёх бесконечных линий. Из вписанной и трёх вневписанных
+ * выбирается та, центр которой ближе к preferred (обычно — к местам тапов).
+ */
+export function getCircleTangentTo3Lines(
+  l1: InfiniteLineParams,
+  l2: InfiniteLineParams,
+  l3: InfiniteLineParams,
+  preferred: Point,
+): Pick<CircleShape, 'center' | 'radius'> | null {
+  'worklet';
+  const lines = [l1, l2, l3].map((line) => {
+    const rad = (line.angle * Math.PI) / 180;
+    const nx = -Math.sin(rad);
+    const ny = Math.cos(rad);
+    return { nx, ny, c: nx * line.point.x + ny * line.point.y };
+  });
+  const [a, b, c] = lines;
+  const candidates: Pick<CircleShape, 'center' | 'radius'>[] = [];
+  for (const [s1, s2, s3] of [
+    [1, 1, 1],
+    [1, 1, -1],
+    [1, -1, 1],
+    [1, -1, -1],
+    [-1, 1, 1],
+    [-1, 1, -1],
+    [-1, -1, 1],
+    [-1, -1, -1],
+  ] as const) {
+    const solved = solve3(
+      a.nx,
+      a.ny,
+      -s1,
+      b.nx,
+      b.ny,
+      -s2,
+      c.nx,
+      c.ny,
+      -s3,
+      a.c,
+      b.c,
+      c.c,
+    );
+    if (!solved || !(solved[2] > 0.0005)) continue;
+    const candidate = {
+      center: { x: roundMm(solved[0]), y: roundMm(solved[1]) },
+      radius: roundMm(solved[2]),
+    };
+    const duplicate = candidates.some(
+      (item) =>
+        Math.hypot(item.center.x - candidate.center.x, item.center.y - candidate.center.y) < 0.001 &&
+        Math.abs(item.radius - candidate.radius) < 0.001,
+    );
+    if (!duplicate) candidates.push(candidate);
+  }
+  let best: Pick<CircleShape, 'center' | 'radius'> | null = null;
+  let bestDistance = Infinity;
+  for (const candidate of candidates) {
+    const distance = Math.hypot(candidate.center.x - preferred.x, candidate.center.y - preferred.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
+    }
+  }
+  return best;
 }

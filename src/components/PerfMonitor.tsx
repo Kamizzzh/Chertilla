@@ -156,16 +156,16 @@ type ToggleProps = {
   style?: StyleProp<ViewStyle>;
 };
 
-/** Размер круглой кнопки «PERF», пт. Меньше обычных плавающих кнопок, чтобы не мешать чертить. */
-export const PERF_TOGGLE_SIZE = 34;
+/** Размер круглой кнопки «DEV», пт. Меньше обычных плавающих кнопок, чтобы не мешать чертить. */
+export const DEV_TOGGLE_SIZE = 34;
 
-/** Маленькая полупрозрачная кнопка включения/выключения панели производительности. */
+/** Маленькая полупрозрачная кнопка открытия DEV-стресс-теста. */
 export function PerfToggle({ active, onPress, style }: ToggleProps) {
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={active ? 'Скрыть монитор производительности' : 'Показать монитор производительности'}
+      accessibilityLabel="Открыть DEV-стресс-тест производительности"
       hitSlop={6}
       style={({ pressed }) => [
         styles.toggle,
@@ -173,7 +173,7 @@ export function PerfToggle({ active, onPress, style }: ToggleProps) {
         pressed && styles.togglePressed,
         style,
       ]}>
-      <Text style={[styles.toggleText, active && styles.toggleTextActive]}>PERF</Text>
+      <Text style={[styles.toggleText, active && styles.toggleTextActive]}>DEV</Text>
     </Pressable>
   );
 }
@@ -197,9 +197,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   toggle: {
-    width: PERF_TOGGLE_SIZE,
-    height: PERF_TOGGLE_SIZE,
-    borderRadius: PERF_TOGGLE_SIZE / 2,
+    width: DEV_TOGGLE_SIZE,
+    height: DEV_TOGGLE_SIZE,
+    borderRadius: DEV_TOGGLE_SIZE / 2,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(236, 239, 241, 0.6)',

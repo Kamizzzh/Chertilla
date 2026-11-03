@@ -65,7 +65,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для точки в пересечении объектов.',
       icon: 'vector-intersection',
       preview: 'intersect',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'center',
@@ -73,7 +73,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для точки в центре выбранного объекта.',
       icon: 'circle-outline',
       preview: 'point',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'onObject',
@@ -81,7 +81,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для точки на линии или контуре объекта.',
       icon: 'vector-point',
       preview: 'point',
-      implemented: false,
+      implemented: true,
     },
   ],
   segment: [
@@ -99,7 +99,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для строго горизонтального отрезка.',
       icon: 'arrow-left-right',
       preview: 'line',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'vertical',
@@ -107,7 +107,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для строго вертикального отрезка.',
       icon: 'arrow-up-down',
       preview: 'line',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'angle',
@@ -115,7 +115,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для отрезка с заданным углом наклона.',
       icon: 'angle-acute',
       preview: 'line',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'tangent',
@@ -123,7 +123,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для отрезка, касательного к объекту.',
       icon: 'vector-line',
       preview: 'line',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'parallel',
@@ -131,7 +131,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для отрезка, параллельного выбранной линии.',
       icon: 'content-copy',
       preview: 'line',
-      implemented: false,
+      implemented: true,
     },
   ],
   circle: [
@@ -149,7 +149,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для окружности по двум концам диаметра.',
       icon: 'circle-outline',
       preview: 'circle',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'threePoints',
@@ -157,7 +157,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для окружности, проходящей через три точки.',
       icon: 'circle-outline',
       preview: 'circle',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'tangentThreeLines',
@@ -165,7 +165,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для окружности, касательной к трём линиям.',
       icon: 'vector-circle-variant',
       preview: 'circle',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'centerDiameter',
@@ -173,7 +173,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для окружности по центру и диаметру.',
       icon: 'circle-outline',
       preview: 'circle',
-      implemented: false,
+      implemented: true,
     },
   ],
   arc: [
@@ -191,7 +191,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для дуги по центру, началу и концу.',
       icon: 'vector-circle-variant',
       preview: 'arc',
-      implemented: false,
+      implemented: true,
     },
   ],
   rect: [
@@ -209,7 +209,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для повёрнутого прямоугольника по трём точкам.',
       icon: 'rectangle-outline',
       preview: 'rect',
-      implemented: false,
+      implemented: true,
     },
   ],
   dimension: [
@@ -246,7 +246,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для размера угла между объектами.',
       icon: 'angle-acute',
       preview: 'dimension',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'radius',
@@ -254,7 +254,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для размера радиуса окружности или дуги.',
       icon: 'circle-outline',
       preview: 'dimension',
-      implemented: false,
+      implemented: true,
     },
     {
       id: 'diameter',
@@ -262,7 +262,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       description: 'Способ для размера диаметра окружности.',
       icon: 'circle-outline',
       preview: 'dimension',
-      implemented: false,
+      implemented: true,
     },
   ],
 };

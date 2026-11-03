@@ -222,6 +222,7 @@ type Props = {
   onSelectTool: (tool: Tool) => void;
   dimensionAxis: DimensionAxis;
   onSelectDimensionAxis: (axis: DimensionAxis) => void;
+  onSelectConstructionMethod: (tool: ConstructionTool, methodId: string) => void;
   snapToGrid: boolean;
   onToggleSnapToGrid: () => void;
   isOrthoEnabled: boolean;
@@ -397,6 +398,7 @@ export function Toolbar({
   onSelectTool,
   dimensionAxis,
   onSelectDimensionAxis,
+  onSelectConstructionMethod,
   snapToGrid,
   onToggleSnapToGrid,
   isOrthoEnabled,
@@ -446,7 +448,8 @@ export function Toolbar({
   const openMethods = (tool: ConstructionTool) => {
     hideTooltip();
     if (tool === 'dimension') {
-      setSelectedMethodIds((current) => ({ ...current, dimension: dimensionAxis }));
+      const methodId = dimensionAxis === 'x' ? 'horizontal' : dimensionAxis === 'y' ? 'vertical' : 'aligned';
+      setSelectedMethodIds((current) => ({ ...current, dimension: methodId }));
     }
     setDisplayedMethodTool(tool);
     setActiveMethodTool(tool);
@@ -459,7 +462,8 @@ export function Toolbar({
     if (!option.implemented) return;
 
     if (tool === 'dimension' && option.axis) onSelectDimensionAxis(option.axis);
-    onSelectTool(tool);
+    onSelectConstructionMethod(tool, option.id);
+    if (activeTool !== tool) onSelectTool(tool);
     setActiveMethodTool(null);
   };
 
