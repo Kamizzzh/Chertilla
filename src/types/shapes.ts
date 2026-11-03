@@ -32,20 +32,38 @@ export type DimensionAxis = 'aligned' | 'x' | 'y';
 
 export type XLineMode = 'axisX' | 'axisY' | 'angle' | 'twoPoints';
 
-export type PointShape = {
+export type LineStyle =
+  | 'solid_thick'
+  | 'solid_thin'
+  | 'wavy'
+  | 'dashed'
+  | 'dash_dot_thin'
+  | 'dash_dot_thick'
+  | 'open_dotted'
+  | 'solid_kinks'
+  | 'dash_dot_dot';
+
+/** Внешний вид фигуры. autoColor !== false — цвет следует за темой холста. */
+export type ShapeAppearance = {
+  lineStyle: LineStyle;
+  color: string;
+  autoColor?: boolean;
+};
+
+export type PointShape = ShapeAppearance & {
   id: string;
   type: 'point';
   p: Point;
 };
 
-export type SegmentShape = {
+export type SegmentShape = ShapeAppearance & {
   id: string;
   type: 'segment';
   start: Point;
   end: Point;
 };
 
-export type CircleShape = {
+export type CircleShape = ShapeAppearance & {
   id: string;
   type: 'circle';
   center: Point;
@@ -53,7 +71,7 @@ export type CircleShape = {
 };
 
 /** Бесконечная прямая: проходит через точку point под углом angle (градусы, от оси X против часовой). */
-export type XLineShape = {
+export type XLineShape = ShapeAppearance & {
   id: string;
   type: 'xline';
   point: Point;
@@ -61,7 +79,7 @@ export type XLineShape = {
 };
 
 /** Прямоугольник со сторонами вдоль осей: p1 и p2 — противоположные углы (в любом порядке). */
-export type RectShape = {
+export type RectShape = ShapeAppearance & {
   id: string;
   type: 'rect';
   p1: Point;
@@ -72,7 +90,7 @@ export type RectShape = {
  * Дуга окружности: от угла startAngle до угла endAngle ПРОТИВ часовой стрелки.
  * Углы — в градусах от оси X, в диапазоне [0°, 360°). startAngle ≠ endAngle.
  */
-export type ArcShape = {
+export type ArcShape = ShapeAppearance & {
   id: string;
   type: 'arc';
   center: Point;
@@ -86,7 +104,7 @@ export type ArcShape = {
  * offset — расстояние от прямой p1–p2 до размерной линии, мм; знак — сторона:
  * положительное — слева от направления p1 → p2 (ось Y вверх), отрицательное — справа.
  */
-export type DimensionShape = {
+export type DimensionShape = ShapeAppearance & {
   id: string;
   type: 'dimension';
   p1: Point;

@@ -3,7 +3,7 @@
 // Три уровня нагрузки: Софт (30 фигур), Медиум (300), Хард (1500). Фигуры густо
 // пересекаются — так проверяется скорость отрисовки Skia, а в Харде ещё и отсечение невидимого.
 
-import type { Shape } from '@/types/shapes';
+import type { Shape, ShapeAppearance } from '@/types/shapes';
 import { createProject, getProjects, saveProject } from '@/utils/storage';
 import { roundMm, type Point } from '@/utils/viewport';
 
@@ -26,6 +26,11 @@ export function isDebugProjectName(name: string): boolean {
 
 /** Половина стороны одного «блока» с фигурами, мм: блок — примерно квадрат 1000×1000. */
 const HALF = 500;
+const DEBUG_APPEARANCE: ShapeAppearance = {
+  lineStyle: 'solid_thin',
+  color: '#000000',
+  autoColor: true,
+};
 
 /** Сколько фигур каждого вида в одном блоке. */
 interface BlockCounts {
@@ -127,7 +132,7 @@ function addBlock(
   // Каждая проходит через центр блока и пересекает соседние.
   for (let i = 0; i < counts.rosette; i++) {
     const a = (i / counts.rosette) * 2 * Math.PI;
-    shapes.push({
+    shapes.push({ ...DEBUG_APPEARANCE,
       id: id(),
       type: 'circle',
       center: pt(150 * Math.cos(a), 150 * Math.sin(a)),
@@ -136,11 +141,11 @@ function addBlock(
   }
   // Концентрические окружности (R = 80, 160, …): режут всё, что внутри.
   for (let i = 0; i < counts.rings; i++) {
-    shapes.push({ id: id(), type: 'circle', center: pt(0, 0), radius: 80 + i * 80 });
+    shapes.push({ ...DEBUG_APPEARANCE, id: id(), type: 'circle', center: pt(0, 0), radius: 80 + i * 80 });
   }
   // Хаотичные окружности разного радиуса по всему блоку.
   for (let i = 0; i < counts.randomCircles; i++) {
-    shapes.push({
+    shapes.push({ ...DEBUG_APPEARANCE,
       id: id(),
       type: 'circle',
       center: randomPt(HALF - 100),
@@ -152,15 +157,15 @@ function addBlock(
   // Сетка: горизонтальные и вертикальные отрезки через весь блок.
   for (let i = 0; i < counts.gridLines; i++) {
     const c = gridCoord(i, counts.gridLines);
-    shapes.push({ id: id(), type: 'segment', start: pt(-HALF, c), end: pt(HALF, c) });
-    shapes.push({ id: id(), type: 'segment', start: pt(c, -HALF), end: pt(c, HALF) });
+    shapes.push({ ...DEBUG_APPEARANCE, id: id(), type: 'segment', start: pt(-HALF, c), end: pt(HALF, c) });
+    shapes.push({ ...DEBUG_APPEARANCE, id: id(), type: 'segment', start: pt(c, -HALF), end: pt(c, HALF) });
   }
   // Хаотичные отрезки длиной 150…700 мм под случайными углами.
   for (let i = 0; i < counts.randomSegments; i++) {
     const mid = randomPt(HALF - 150);
     const a = between(0, Math.PI);
     const half = between(75, 350);
-    shapes.push({
+    shapes.push({ ...DEBUG_APPEARANCE,
       id: id(),
       type: 'segment',
       start: { x: roundMm(mid.x - half * Math.cos(a)), y: roundMm(mid.y - half * Math.sin(a)) },
@@ -171,11 +176,11 @@ function addBlock(
   // ── Прямые ──────────────────────────────────────────────────────
   // «Звезда»: прямые через одну точку (250; 250) от центра блока с шагом 9°.
   for (let i = 0; i < counts.starLines; i++) {
-    shapes.push({ id: id(), type: 'xline', point: pt(250, 250), angle: i * 9 });
+    shapes.push({ ...DEBUG_APPEARANCE, id: id(), type: 'xline', point: pt(250, 250), angle: i * 9 });
   }
   // Прямые через случайные точки под случайными углами [0°, 180°).
   for (let i = 0; i < counts.randomXLines; i++) {
-    shapes.push({
+    shapes.push({ ...DEBUG_APPEARANCE,
       id: id(),
       type: 'xline',
       point: randomPt(HALF),
@@ -187,7 +192,7 @@ function addBlock(
   // Точки в узлах сетки (в Медиуме совпадают с пересечениями отрезков сетки).
   for (let ix = 0; ix < counts.gridPointsSide; ix++) {
     for (let iy = 0; iy < counts.gridPointsSide; iy++) {
-      shapes.push({
+      shapes.push({ ...DEBUG_APPEARANCE,
         id: id(),
         type: 'point',
         p: pt(gridCoord(ix, counts.gridPointsSide), gridCoord(iy, counts.gridPointsSide)),
@@ -196,7 +201,7 @@ function addBlock(
   }
   // Хаотичные точки.
   for (let i = 0; i < counts.randomPoints; i++) {
-    shapes.push({ id: id(), type: 'point', p: randomPt(HALF) });
+    shapes.push({ ...DEBUG_APPEARANCE, id: id(), type: 'point', p: randomPt(HALF) });
   }
 }
 

@@ -30,7 +30,10 @@ import {
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
-import type { Shape, Tool } from '@/types/shapes';
+import { CANVAS_COLORS, type CanvasColors } from '@/constants/canvasTheme';
+import { DASH_INTERVALS_PX, KINKS_EFFECT, WAVY_EFFECT } from '@/constants/lineStyles';
+import type { LineStyle, Shape, Tool } from '@/types/shapes';
+import type { UCS } from '@/types/ucs';
 import {
   angleTo,
   arcBox,
@@ -53,6 +56,7 @@ import { hitTest, shapesInRect } from '@/utils/hitTest';
 import { canIntersect } from '@/utils/intersection';
 import { findSnapPoint, type SnapResult } from '@/utils/snap';
 import { translateShape } from '@/utils/shapeTransform';
+import { drawingToScreen, screenToDrawing } from '@/utils/ucs';
 import {
   clampScale,
   gridStepMm,
@@ -67,27 +71,20 @@ import {
   type Viewport,
 } from '@/utils/viewport';
 
-// Цвета холста (светлая тема).
+// Цвета служебных маркеров не зависят от темы; палитра чертежа приходит в props.
 const COLORS = {
-  background: '#FFFFFF',
-  gridMinor: '#E6E6E6',
-  gridMajor: '#C4C4C4',
-  axisX: '#E53935', // красная
-  axisY: '#43A047', // зелёная
-  shape: '#212121', // фигуры — тёмные линии
-  pending: '#1E88E5', // первая точка фигуры, которая ещё не достроена
-  snap: '#1E88E5', // подсветка фигуры и маркер привязки
-  selected: '#1E88E5', // выделенная фигура (инструмент «Выделение»)
-  handle: '#1E88E5', // рукоятки выделенной фигуры
-  handleBorder: '#FFFFFF', // белая обводка рукояток — видно поверх синей линии
-  intersect: '#FF6D00', // яркие маркеры точек пересечения
-  objectSnap: '#43A047', // зелёный маркер привязки к объекту при перетаскивании рукоятки
-  marqueeFill: 'rgba(30, 136, 229, 0.2)', // заливка рамки выделения (синий, прозрачность 0.2)
-  marqueeStroke: '#1E88E5', // обводка рамки выделения
-  touchDot: '#455A64', // точка под пальцем без привязки
-  loupeRim: '#FFFFFF',
-  loupeOuterRim: '#90A4AE', // тонкий серый ободок, чтобы белую лупу было видно на белом холсте
+  pending: '#1E88E5',
+  snap: '#1E88E5',
+  selected: '#1E88E5',
+  handle: '#1E88E5',
+  handleBorder: '#FFFFFF',
+  intersect: '#FF6D00',
+  objectSnap: '#43A047',
+  marqueeFill: 'rgba(30, 136, 229, 0.2)',
+  marqueeStroke: '#1E88E5',
   crosshair: '#D32F2F',
+  ucsX: '#FF5252',
+  ucsY: '#00E676',
 };
 
 const RESET_DURATION_MS = 250;
@@ -209,6 +206,12 @@ type Props = {
   ref?: Ref<DrawingCanvasHandle>;
   tool: Tool;
   shapes: Shape[];
+  canvasColors: CanvasColors;
+  activeUCS: UCS;
+  ucsList: UCS[];
+  ucsCreationActive: boolean;
+  ucsOrigin: Point | null;
+  onUcsTap: (world: Point) => void;
   /**
    * Первая точка фигуры (начало отрезка, центр окружности, точка прямой, угол прямоугольника,
    * начало дуги), если фигура ещё не достроена.
@@ -279,18 +282,19 @@ type Marquee = { x0: number; y0: number; x1: number; y1: number };
  */
 type Grab = { index: number; dx: number; dy: number };
 
-/** Как записывать фигуры в сцену: цвет, прибавка к толщине линий (px) и множитель размера точек. */
+/** Как записывать фигуры в сцену: цвет, прибавка к толщине и использование цвета фигуры. */
 type SceneStyle = {
   color: string;
   extraWidthPx: number;
   pointFactor: number;
+  respectShapeColor: boolean;
 };
 
-const NORMAL_STYLE: SceneStyle = { color: COLORS.shape, extraWidthPx: 0, pointFactor: 1 };
 const SELECTED_STYLE: SceneStyle = {
   color: COLORS.selected,
   extraWidthPx: HIGHLIGHT_EXTRA_PX,
   pointFactor: PENDING_RADIUS_FACTOR,
+  respectShapeColor: false,
 };
 
 /** Состояние долгого нажатия (пока на экране лупа). */
@@ -335,24 +339,24 @@ function toLocal(px: number, k: number): number {
   return w > 0 && Number.isFinite(w) ? w : 1;
 }
 
-/** Остаток от деления, всегда в диапазоне [0, m) — в том числе для отрицательных a. */
-function positiveMod(a: number, m: number): number {
+/** Видимая область в локальных мм активной СК; при повороте учитываются все 4 угла. */
+function visibleRect(vp: Viewport, ucs: UCS) {
   'worklet';
-  return ((a % m) + m) % m;
-}
-
-/** Видимая область чертежа, мм. */
-function visibleRect(vp: Viewport) {
-  'worklet';
-  const topLeft = screenToWorld(vp, { x: 0, y: 0 });
-  const bottomRight = screenToWorld(vp, { x: vp.width, y: vp.height });
-  return { x0: topLeft.x, y0: bottomRight.y, x1: bottomRight.x, y1: topLeft.y };
+  const corners = [
+    screenToDrawing(vp, { x: 0, y: 0 }, ucs),
+    screenToDrawing(vp, { x: vp.width, y: 0 }, ucs),
+    screenToDrawing(vp, { x: 0, y: vp.height }, ucs),
+    screenToDrawing(vp, { x: vp.width, y: vp.height }, ucs),
+  ];
+  const xs = corners.map((p) => p.x);
+  const ys = corners.map((p) => p.y);
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
 }
 
 /** Новая область покрытия вокруг текущего вида. */
-function makeCover(vp: Viewport): Cover {
+function makeCover(vp: Viewport, ucs: UCS): Cover {
   'worklet';
-  const v = visibleRect(vp);
+  const v = visibleRect(vp, ucs);
   const mx = (v.x1 - v.x0) * COVER_MARGIN_SCREENS;
   const my = (v.y1 - v.y0) * COVER_MARGIN_SCREENS;
   return { x0: v.x0 - mx, y0: v.y0 - my, x1: v.x1 + mx, y1: v.y1 + my };
@@ -363,10 +367,10 @@ function makeCover(vp: Viewport): Cover {
  * - видимая область вышла за край покрытия (сдвинули вид больше чем на экран или отдалили);
  * - покрытие стало намного больше видимой области (сильно приблизили).
  */
-function needsNewCover(c: Cover, vp: Viewport): boolean {
+function needsNewCover(c: Cover, vp: Viewport, ucs: UCS): boolean {
   'worklet';
   if (vp.width <= 0 || vp.height <= 0) return false;
-  const v = visibleRect(vp);
+  const v = visibleRect(vp, ucs);
   // Вид посчитался в NaN / бесконечность — покрытие не трогаем.
   if (![v.x0, v.y0, v.x1, v.y1].every(Number.isFinite)) return false;
   if (v.x0 < c.x0 || v.x1 > c.x1 || v.y0 < c.y0 || v.y1 > c.y1) return true;
@@ -405,12 +409,19 @@ function hairlinePaint(color: string, antiAlias: boolean): SkPaint {
  * поэтому плитку не нужно перезаписывать при зуме.
  * antiAlias = false — без сглаживания (для «быстрого жеста»).
  */
-function recordGridTile(width: number, height: number, antiAlias: boolean): SkPicture {
+function recordGridTile(
+  width: number,
+  height: number,
+  antiAlias: boolean,
+  gridMinor: string,
+  gridMajor: string,
+): SkPicture {
   'worklet';
-  // Слева/сверху — запас в 10 шагов (на величину сдвига), справа/снизу — до края экрана.
-  const from = -GRID_MAJOR_EVERY;
-  const nx = Math.ceil(width / MIN_GRID_PX) + 1;
-  const ny = Math.ceil(height / MIN_GRID_PX) + 1;
+  // Симметричная плитка перекрывает экран даже после поворота СК.
+  const extent = Math.ceil(Math.hypot(width, height) / (2 * MIN_GRID_PX)) + GRID_MAJOR_EVERY * 2;
+  const from = -extent;
+  const nx = extent;
+  const ny = extent;
 
   const recorder = Skia.PictureRecorder();
   const canvas = recorder.beginRecording(Skia.XYWHRect(from, from, nx - from, ny - from));
@@ -418,7 +429,7 @@ function recordGridTile(width: number, height: number, antiAlias: boolean): SkPi
 
   // Сначала мелкие линии, потом основные — чтобы на пересечениях была видна основная.
   for (const major of [false, true]) {
-    const paint = hairlinePaint(major ? COLORS.gridMajor : COLORS.gridMinor, antiAlias);
+    const paint = hairlinePaint(major ? gridMajor : gridMinor, antiAlias);
     for (let i = from; i <= nx; i++) {
       if ((i % GRID_MAJOR_EVERY === 0) !== major) continue;
       canvas.drawLine(i, from, i, ny, paint);
@@ -649,6 +660,80 @@ function strokePaint(color: string, width: number, cap: StrokeCap, antiAlias: bo
   return paint;
 }
 
+function lineWidthFactor(lineStyle: LineStyle): number {
+  'worklet';
+  return lineStyle === 'solid_thick' || lineStyle === 'dash_dot_thick' ? 2 : 1;
+}
+
+function lineWidthFor(k: number, extraWidthPx: number, lineStyle: LineStyle): number {
+  'worklet';
+  const widthPx = segmentWidthPx(k) * lineWidthFactor(lineStyle) + extraWidthPx;
+  return widthPx <= SEGMENT_WIDTH_MIN_PX ? 0 : toLocal(widthPx, k);
+}
+
+/** ГОСТовские штрихи задаются в px экрана и переводятся в локальные мм. */
+function applyLinePathEffect(paint: SkPaint, lineStyle: LineStyle, k: number) {
+  'worklet';
+  if (lineStyle === 'wavy') {
+    paint.setPathEffect(
+      Skia.PathEffect.MakeDiscrete(
+        toLocal(WAVY_EFFECT.length, k),
+        toLocal(WAVY_EFFECT.deviation, k),
+        WAVY_EFFECT.seed,
+      ),
+    );
+    return;
+  }
+  if (lineStyle === 'solid_kinks') {
+    paint.setPathEffect(
+      Skia.PathEffect.MakeDiscrete(
+        toLocal(KINKS_EFFECT.length, k),
+        toLocal(KINKS_EFFECT.deviation, k),
+        KINKS_EFFECT.seed,
+      ),
+    );
+    return;
+  }
+  const intervals = DASH_INTERVALS_PX[lineStyle];
+  if (intervals) paint.setPathEffect(Skia.PathEffect.MakeDash(intervals.map((v) => toLocal(v, k)), 0));
+}
+
+function cachedStrokePaint(
+  cache: Record<string, SkPaint>,
+  color: string,
+  width: number,
+  cap: StrokeCap,
+  antiAlias: boolean,
+  lineStyle: LineStyle,
+  k: number,
+): SkPaint {
+  'worklet';
+  const key = `${color}|${width}|${cap}|${antiAlias}|${lineStyle}`;
+  const existing = cache[key];
+  if (existing) return existing;
+  const paint = strokePaint(color, width, cap, antiAlias);
+  applyLinePathEffect(paint, lineStyle, k);
+  cache[key] = paint;
+  return paint;
+}
+
+function shapeSceneColor(s: Shape, style: SceneStyle): string {
+  'worklet';
+  return style.respectShapeColor && s.autoColor === false && s.color ? s.color : style.color;
+}
+
+type ScenePointGroup = { color: string; points: SkPoint[] };
+
+function addScenePoint(groups: ScenePointGroup[], color: string, p: Point) {
+  'worklet';
+  let group = groups.find((g) => g.color === color);
+  if (!group) {
+    group = { color, points: [] };
+    groups.push(group);
+  }
+  group.points.push(vec(p.x, p.y));
+}
+
 /** Пустая сцена — безопасное значение, если что-то пошло не так. */
 function emptyPicture(): SkPicture {
   'worklet';
@@ -710,35 +795,40 @@ function recordShapes(
   const canvas = recorder.beginRecording(Skia.XYWHRect(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0));
   if (c.x1 <= c.x0 || c.y1 <= c.y0) return recorder.finishRecordingAsPicture();
 
-  const lineWidthPx = segmentWidthPx(k) + style.extraWidthPx;
-  const lineWidth = lineWidthPx <= SEGMENT_WIDTH_MIN_PX ? 0 : toLocal(lineWidthPx, k);
-  const { color } = style;
-  // Отрезки, окружности, прямоугольники и дуги.
-  const roundPaint = strokePaint(color, lineWidth, StrokeCap.Round, antiAlias);
-  const buttPaint = strokePaint(color, lineWidth, StrokeCap.Butt, antiAlias); // прямые: концы за экраном
+  const strokeCache: Record<string, SkPaint> = {};
+  const textCache: Record<string, SkPaint> = {};
   const pointDiameter = toLocal(pointRadiusPx(k) * 2 * style.pointFactor, k);
-  const pointPaint = strokePaint(color, pointDiameter, StrokeCap.Round, antiAlias);
 
   const lod = shapes.length > LOD_MIN_SHAPES;
   const tinyCircleMm = LOD_TINY_CIRCLE_PX / k;
   const tinySegmentMm = LOD_TINY_SEGMENT_PX / k;
-  // Все точки рисуются одной командой drawPoints.
-  const points: SkPoint[] = [];
+  // Точки группируются по цвету: одна команда drawPoints на каждый цвет.
+  const pointGroups: ScenePointGroup[] = [];
 
   // Текст размеров: размер на экране = DIM_TEXT_HEIGHT_MM · k, зажатый в [MIN, MAX] px;
   // в мм чертежа — делим на k. Шрифт создаётся, только если на сцене есть размер.
   const dimTextPx = Math.min(DIM_TEXT_MAX_PX, Math.max(DIM_TEXT_MIN_PX, DIM_TEXT_HEIGHT_MM * k));
   const dimTextMm = dimTextPx / k;
   const dimFont = shapes.some((s) => s.type === 'dimension') ? makeDimFont(dimTextMm) : null;
-  const textPaint = Skia.Paint();
-  textPaint.setAntiAlias(antiAlias);
-  textPaint.setColor(Skia.Color(color));
 
   for (const s of shapes) {
+    const lineStyle = s.lineStyle ?? 'solid_thin';
+    const color = shapeSceneColor(s, style);
+    const width = lineWidthFor(k, style.extraWidthPx, lineStyle);
+    const baseCap = s.type === 'dimension' || s.type === 'xline' ? StrokeCap.Butt : StrokeCap.Round;
+    const cap = lineStyle === 'open_dotted' ? StrokeCap.Round : baseCap;
+    const linePaint = cachedStrokePaint(strokeCache, color, width, cap, antiAlias, lineStyle, k);
     if (s.type === 'dimension') {
       const layout = dimensionLayout(s);
       if (!layout) continue;
-      for (const [a, b] of layout.lines) canvas.drawLine(a.x, a.y, b.x, b.y, buttPaint);
+      for (const [a, b] of layout.lines) canvas.drawLine(a.x, a.y, b.x, b.y, linePaint);
+      let textPaint = textCache[color];
+      if (!textPaint) {
+        textPaint = Skia.Paint();
+        textPaint.setAntiAlias(antiAlias);
+        textPaint.setColor(Skia.Color(color));
+        textCache[color] = textPaint;
+      }
       const t = layout.text;
       const w = dimFont ? dimFont.measureText(t.value).width : 0;
       // Текст не рисуется, если размерная линия на экране короче него (иначе каша).
@@ -759,30 +849,33 @@ function recordShapes(
         canvas.restore();
       }
     } else if (s.type === 'point') {
-      points.push(vec(s.p.x, s.p.y));
+      addScenePoint(pointGroups, color, s.p);
     } else if (s.type === 'segment') {
       const len = Math.hypot(s.end.x - s.start.x, s.end.y - s.start.y);
       if (lod && len < tinySegmentMm) {
-        points.push(vec((s.start.x + s.end.x) / 2, (s.start.y + s.end.y) / 2));
+        addScenePoint(pointGroups, color, {
+          x: (s.start.x + s.end.x) / 2,
+          y: (s.start.y + s.end.y) / 2,
+        });
       } else {
-        canvas.drawLine(s.start.x, s.start.y, s.end.x, s.end.y, roundPaint);
+        canvas.drawLine(s.start.x, s.start.y, s.end.x, s.end.y, linePaint);
       }
     } else if (s.type === 'circle') {
       if (lod && s.radius < tinyCircleMm) {
-        points.push(vec(s.center.x, s.center.y));
+        addScenePoint(pointGroups, color, s.center);
       } else {
-        canvas.drawCircle(s.center.x, s.center.y, s.radius, roundPaint);
+        canvas.drawCircle(s.center.x, s.center.y, s.radius, linePaint);
       }
     } else if (s.type === 'rect') {
       const b = rectBox(s.p1, s.p2);
       if (lod && Math.max(b.x1 - b.x0, b.y1 - b.y0) < tinySegmentMm) {
-        points.push(vec((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2));
+        addScenePoint(pointGroups, color, { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 });
       } else {
-        canvas.drawRect(Skia.XYWHRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0), roundPaint);
+        canvas.drawRect(Skia.XYWHRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0), linePaint);
       }
     } else if (s.type === 'arc') {
       if (lod && s.radius < tinyCircleMm) {
-        points.push(vec(s.center.x, s.center.y));
+        addScenePoint(pointGroups, color, s.center);
       } else {
         // Угол в Skia растёт к оси +Y. Внутри матрицы чертежа ось Y смотрит вверх,
         // поэтому положительный угол — «против часовой», как и хранится дуга (см. addOutlines).
@@ -792,7 +885,7 @@ function recordShapes(
           s.startAngle,
           arcSweep(s.startAngle, s.endAngle),
           false,
-          roundPaint,
+          linePaint,
         );
       }
     } else if (s.type === 'xline') {
@@ -803,11 +896,14 @@ function recordShapes(
       const p = s.point;
       const t = clipLine(p, ux, uy, -Infinity, Infinity, c);
       if (!t) continue;
-      canvas.drawLine(p.x + ux * t[0], p.y + uy * t[0], p.x + ux * t[1], p.y + uy * t[1], buttPaint);
+      canvas.drawLine(p.x + ux * t[0], p.y + uy * t[0], p.x + ux * t[1], p.y + uy * t[1], linePaint);
     }
   }
 
-  if (points.length > 0) canvas.drawPoints(PointMode.Points, points, pointPaint);
+  for (const group of pointGroups) {
+    const paint = strokePaint(group.color, pointDiameter, StrokeCap.Round, antiAlias);
+    canvas.drawPoints(PointMode.Points, group.points, paint);
+  }
   return recorder.finishRecordingAsPicture();
 }
 
@@ -978,6 +1074,12 @@ export function DrawingCanvas({
   ref,
   tool,
   shapes,
+  canvasColors,
+  activeUCS,
+  ucsList,
+  ucsCreationActive,
+  ucsOrigin,
+  onUcsTap,
   pendingStart,
   pendingMiddle,
   selectedShapeIds,
@@ -1019,6 +1121,34 @@ export function DrawingCanvas({
   // сам пересчитывается при её изменении.
   const shapesSV = useSharedValue<Shape[]>(shapes);
   const selectedSV = useSharedValue<Shape[]>(selectedShapes);
+  const canvasColorsSV = useSharedValue<CanvasColors>(canvasColors);
+  const normalStyleSV = useSharedValue<SceneStyle>({
+    color: canvasColors.shape,
+    extraWidthPx: 0,
+    pointFactor: 1,
+    respectShapeColor: true,
+  });
+  const ucsSV = useSharedValue<UCS>(activeUCS);
+  const ucsListSV = useSharedValue<UCS[]>(ucsList);
+  const ucsOriginSV = useSharedValue<Point | null>(ucsOrigin);
+  useEffect(() => {
+    canvasColorsSV.set(canvasColors);
+    normalStyleSV.set({
+      color: canvasColors.shape,
+      extraWidthPx: 0,
+      pointFactor: 1,
+      respectShapeColor: true,
+    });
+  }, [canvasColors, canvasColorsSV, normalStyleSV]);
+  useEffect(() => {
+    ucsSV.set(activeUCS);
+  }, [activeUCS, ucsSV]);
+  useEffect(() => {
+    ucsListSV.set(ucsList);
+  }, [ucsList, ucsListSV]);
+  useEffect(() => {
+    ucsOriginSV.set(ucsOrigin);
+  }, [ucsOrigin, ucsOriginSV]);
   const markersSV = useSharedValue<Point[]>(intersectMarkers);
   useEffect(() => {
     markersSV.set(intersectMarkers);
@@ -1083,10 +1213,15 @@ export function DrawingCanvas({
     const vp = viewport.get();
     if (vp.width <= 0 || vp.height <= 0) return IDENTITY;
     const kk = safeK(vp);
-    const tx = vp.width / 2 + vp.translateX;
-    const ty = vp.height / 2 + vp.translateY;
-    if (!Number.isFinite(tx) || !Number.isFinite(ty)) return IDENTITY;
-    return [kk, 0, tx, 0, -kk, ty, 0, 0, 1];
+    const ucs = ucsSV.get();
+    const rad = (ucs.angle * Math.PI) / 180;
+    const c = Math.cos(rad);
+    const s = Math.sin(rad);
+    // V · U: сначала локальная СК поворачивается и смещается, затем вид (мм -> px, Y вниз).
+    const tx = vp.width / 2 + vp.translateX + kk * ucs.dx;
+    const ty = vp.height / 2 + vp.translateY - kk * ucs.dy;
+    if (![tx, ty, c, s].every(Number.isFinite)) return IDENTITY;
+    return [kk * c, -kk * s, tx, -kk * s, -kk * c, ty, 0, 0, 1];
   });
 
   // --- Сетка: плитка (Skia Picture) записывается только при изменении размера холста ---
@@ -1095,9 +1230,10 @@ export function DrawingCanvas({
   // Пан и зум меняют лишь матрицу сетки (сдвиг по остатку и размер шага в px).
   const gridPictures = useDerivedValue(() => {
     try {
+      const palette = canvasColorsSV.get();
       return {
-        smooth: recordGridTile(width.get(), height.get(), true),
-        fast: recordGridTile(width.get(), height.get(), false),
+        smooth: recordGridTile(width.get(), height.get(), true, palette.gridMinor, palette.gridMajor),
+        fast: recordGridTile(width.get(), height.get(), false, palette.gridMinor, palette.gridMajor),
       };
     } catch (e) {
       console.warn('[DrawingCanvas] grid:', e);
@@ -1120,21 +1256,102 @@ export function DrawingCanvas({
   // Сдвиг берётся по остатку от деления на 10 шагов — поэтому плитки всегда хватает.
   const gridMatrix = useDerivedValue<Matrix3>(() => {
     const vp = viewport.get();
-    const s = gridStepPx.get();
-    const period = s * GRID_MAJOR_EVERY;
-    const ox = positiveMod(vp.width / 2 + vp.translateX, period);
-    const oy = positiveMod(vp.height / 2 + vp.translateY, period);
-    if (!(s > 0) || !Number.isFinite(ox) || !Number.isFinite(oy)) return IDENTITY;
-    return [s, 0, ox, 0, s, oy, 0, 0, 1];
+    const ucs = ucsSV.get();
+    const stepPx = gridStepPx.get();
+    const kk = safeK(vp);
+    const stepMm = stepPx / kk;
+    const periodMm = stepMm * GRID_MAJOR_EVERY;
+    const center = screenToDrawing(vp, { x: vp.width / 2, y: vp.height / 2 }, ucs);
+    const anchor = {
+      x: Math.round(center.x / periodMm) * periodMm,
+      y: Math.round(center.y / periodMm) * periodMm,
+    };
+    const origin = drawingToScreen(vp, anchor, ucs);
+    const rad = (ucs.angle * Math.PI) / 180;
+    const c = Math.cos(rad);
+    const sn = Math.sin(rad);
+    if (!(stepPx > 0) || ![origin.x, origin.y, c, sn].every(Number.isFinite)) return IDENTITY;
+    return [kk * c * stepMm, -kk * sn * stepMm, origin.x, -kk * sn * stepMm, -kk * c * stepMm, origin.y, 0, 0, 1];
   });
 
-  // --- Оси: две линии в px экрана (только 4 числа на кадр) ---
-  const originX = useDerivedValue(() => width.get() / 2 + translateX.get());
-  const originY = useDerivedValue(() => height.get() / 2 + translateY.get());
-  const axisXStart = useDerivedValue(() => vec(0, originY.get()));
-  const axisXEnd = useDerivedValue(() => vec(width.get(), originY.get()));
-  const axisYStart = useDerivedValue(() => vec(originX.get(), 0));
-  const axisYEnd = useDerivedValue(() => vec(originX.get(), height.get()));
+  // --- Оси активной СК: проходят через её начало и повернуты вместе с чертежом ---
+  const ucsOriginScreen = useDerivedValue(() => {
+    const ucs = ucsSV.get();
+    return worldToScreen(viewport.get(), { x: ucs.dx, y: ucs.dy });
+  });
+  const axisXStart = useDerivedValue(() => {
+    const vp = viewport.get();
+    const o = ucsOriginScreen.get();
+    const rad = (ucsSV.get().angle * Math.PI) / 180;
+    const length = Math.hypot(vp.width, vp.height);
+    return vec(o.x - Math.cos(rad) * length, o.y + Math.sin(rad) * length);
+  });
+  const axisXEnd = useDerivedValue(() => {
+    const vp = viewport.get();
+    const o = ucsOriginScreen.get();
+    const rad = (ucsSV.get().angle * Math.PI) / 180;
+    const length = Math.hypot(vp.width, vp.height);
+    return vec(o.x + Math.cos(rad) * length, o.y - Math.sin(rad) * length);
+  });
+  const axisYStart = useDerivedValue(() => {
+    const vp = viewport.get();
+    const o = ucsOriginScreen.get();
+    const rad = (ucsSV.get().angle * Math.PI) / 180;
+    const length = Math.hypot(vp.width, vp.height);
+    return vec(o.x + Math.sin(rad) * length, o.y + Math.cos(rad) * length);
+  });
+  const axisYEnd = useDerivedValue(() => {
+    const vp = viewport.get();
+    const o = ucsOriginScreen.get();
+    const rad = (ucsSV.get().angle * Math.PI) / 180;
+    const length = Math.hypot(vp.width, vp.height);
+    return vec(o.x - Math.sin(rad) * length, o.y - Math.cos(rad) * length);
+  });
+
+  // Метки СК рисуются в местах их установки; размер осей задан в px экрана.
+  const ucsMarkers = useDerivedValue(() => {
+    const vp = viewport.get();
+    const activeId = ucsSV.get().id;
+    const activeX = Skia.PathBuilder.Make();
+    const activeY = Skia.PathBuilder.Make();
+    const inactiveX = Skia.PathBuilder.Make();
+    const inactiveY = Skia.PathBuilder.Make();
+    for (const ucs of ucsListSV.get()) {
+      const active = ucs.id === activeId;
+      const xPath = active ? activeX : inactiveX;
+      const yPath = active ? activeY : inactiveY;
+      const o = worldToScreen(vp, { x: ucs.dx, y: ucs.dy });
+      const rad = (ucs.angle * Math.PI) / 180;
+      const length = active ? 52 : 38;
+      xPath.moveTo(o.x, o.y);
+      xPath.lineTo(o.x + Math.cos(rad) * length, o.y - Math.sin(rad) * length);
+      yPath.moveTo(o.x, o.y);
+      yPath.lineTo(o.x - Math.sin(rad) * length, o.y - Math.cos(rad) * length);
+      xPath.addCircle(o.x, o.y, active ? 3 : 2);
+    }
+    return {
+      activeX: activeX.build(),
+      activeY: activeY.build(),
+      inactiveX: inactiveX.build(),
+      inactiveY: inactiveY.build(),
+    };
+  });
+  const ucsActiveXPath = useDerivedValue(() => ucsMarkers.get().activeX);
+  const ucsActiveYPath = useDerivedValue(() => ucsMarkers.get().activeY);
+  const ucsInactiveXPath = useDerivedValue(() => ucsMarkers.get().inactiveX);
+  const ucsInactiveYPath = useDerivedValue(() => ucsMarkers.get().inactiveY);
+  const ucsDraftPath = useDerivedValue(() => {
+    const origin = ucsOriginSV.get();
+    if (!origin || !ucsCreationActive) return noPath;
+    const o = worldToScreen(viewport.get(), origin);
+    const path = Skia.PathBuilder.Make();
+    path.addCircle(o.x, o.y, 8);
+    path.moveTo(o.x - 14, o.y);
+    path.lineTo(o.x + 14, o.y);
+    path.moveTo(o.x, o.y - 14);
+    path.lineTo(o.x, o.y + 14);
+    return path.build();
+  });
 
   // --- Перетаскивание рукоятки выделенной фигуры ---
   // Всё живёт в UI-потоке: фигура меняется за пальцем без участия React.
@@ -1159,7 +1376,7 @@ export function DrawingCanvas({
   const dragSnapMarker = useDerivedValue(() => {
     const sp = dragSnap.get();
     if (!sp) return noPath;
-    const p = worldToScreen(viewport.get(), sp);
+    const p = drawingToScreen(viewport.get(), sp, ucsSV.get());
     const h = SNAP_MARKER_HALF_PX;
     const path = Skia.PathBuilder.Make();
     path.addRect(Skia.XYWHRect(p.x - h, p.y - h, h * 2, h * 2));
@@ -1196,10 +1413,17 @@ export function DrawingCanvas({
   const cover = useSharedValue<Cover>(EMPTY_COVER);
   const sceneLevel = useSharedValue(kLevel(PX_PER_MM)); // при открытии зум = 1
   useAnimatedReaction(
-    () => viewport.get(),
-    (vp) => {
+    () => ({ vp: viewport.get(), ucs: ucsSV.get() }),
+    (current, previous) => {
       try {
-        if (needsNewCover(cover.get(), vp)) cover.set(makeCover(vp));
+        const { vp, ucs } = current;
+        const ucsChanged =
+          !previous ||
+          previous.ucs.id !== ucs.id ||
+          previous.ucs.dx !== ucs.dx ||
+          previous.ucs.dy !== ucs.dy ||
+          previous.ucs.angle !== ucs.angle;
+        if (ucsChanged || needsNewCover(cover.get(), vp, ucs)) cover.set(makeCover(vp, ucs));
         const level = kLevel(safeK(vp));
         if (level !== sceneLevel.get()) sceneLevel.set(level);
       } catch (e) {
@@ -1234,7 +1458,7 @@ export function DrawingCanvas({
         cover.get(),
         levelToK(sceneLevel.get()),
         !isInteracting.get(),
-        NORMAL_STYLE,
+        normalStyleSV.get(),
       );
     } catch (e) {
       console.warn('[DrawingCanvas] picture:', e);
@@ -1276,7 +1500,7 @@ export function DrawingCanvas({
     const h = HANDLE_HALF_PX;
     const path = Skia.PathBuilder.Make();
     for (const point of shapeHandles(s, safeK(vp))) {
-      const p = worldToScreen(vp, point);
+      const p = drawingToScreen(vp, point, ucsSV.get());
       path.addRect(Skia.XYWHRect(p.x - h, p.y - h, h * 2, h * 2));
     }
     return path.build();
@@ -1289,7 +1513,7 @@ export function DrawingCanvas({
     const vp = viewport.get();
     const path = Skia.PathBuilder.Make();
     for (const point of list) {
-      const p = worldToScreen(vp, point);
+      const p = drawingToScreen(vp, point, ucsSV.get());
       path.addCircle(p.x, p.y, INTERSECT_MARKER_RADIUS_PX);
     }
     return path.build();
@@ -1352,7 +1576,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t || !t.snap) return noPath;
     const path = Skia.PathBuilder.Make();
-    const p = worldToScreen(viewport.get(), t.target);
+    const p = drawingToScreen(viewport.get(), t.target, ucsSV.get());
     const h = SNAP_MARKER_HALF_PX;
     if (t.snap.kind === 'midpoint') {
       path.moveTo(p.x, p.y - h);
@@ -1376,11 +1600,13 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t) return noPath;
     const path = Skia.PathBuilder.Make();
-    const p = worldToScreen(viewport.get(), t.target);
+    const p = drawingToScreen(viewport.get(), t.target, ucsSV.get());
     path.addCircle(p.x, p.y, TOUCH_DOT_RADIUS_PX);
     return path.build();
   });
-  const touchDotColor = useDerivedValue(() => (touch.get()?.snap ? COLORS.snap : COLORS.touchDot));
+  const touchDotColor = useDerivedValue(() =>
+    touch.get()?.snap ? COLORS.snap : canvasColorsSV.get().touchDot,
+  );
 
   // --- Лупа ---
 
@@ -1411,7 +1637,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t) return NO_TRANSFORM;
     const c = loupeCenter.get();
-    const p = worldToScreen(viewport.get(), t.target);
+    const p = drawingToScreen(viewport.get(), t.target, ucsSV.get());
     return [
       { translateX: c.x },
       { translateY: c.y },
@@ -1468,7 +1694,7 @@ export function DrawingCanvas({
   const marqueePoint1Marker = useDerivedValue(() => {
     const p1 = marqueePoint1.get();
     if (!p1) return noPath;
-    const { x, y } = worldToScreen(viewport.get(), p1);
+    const { x, y } = drawingToScreen(viewport.get(), p1, ucsSV.get());
     const arm = MARQUEE_CORNER_ARM_PX;
     const path = Skia.PathBuilder.Make();
     path.moveTo(x - arm, y);
@@ -1479,19 +1705,24 @@ export function DrawingCanvas({
     return path.build();
   });
 
-  // Прямоугольник рамки в px экрана. Пока рамки нет — путь пустой.
+  // Рамка прямоугольна в локальной СК и на экране поворачивается вместе с чертежом.
   const marqueePath = useDerivedValue(() => {
     const m = marquee.get();
     if (!m) return noPath;
+    const vp = viewport.get();
+    const ucs = ucsSV.get();
+    const a = screenToDrawing(vp, { x: m.x0, y: m.y0 }, ucs);
+    const b = screenToDrawing(vp, { x: m.x1, y: m.y1 }, ucs);
+    const p1 = drawingToScreen(vp, a, ucs);
+    const p2 = drawingToScreen(vp, { x: b.x, y: a.y }, ucs);
+    const p3 = drawingToScreen(vp, b, ucs);
+    const p4 = drawingToScreen(vp, { x: a.x, y: b.y }, ucs);
     const path = Skia.PathBuilder.Make();
-    path.addRect(
-      Skia.XYWHRect(
-        Math.min(m.x0, m.x1),
-        Math.min(m.y0, m.y1),
-        Math.abs(m.x1 - m.x0),
-        Math.abs(m.y1 - m.y0),
-      ),
-    );
+    path.moveTo(p1.x, p1.y);
+    path.lineTo(p2.x, p2.y);
+    path.lineTo(p3.x, p3.y);
+    path.lineTo(p4.x, p4.y);
+    path.close();
     return path.build();
   });
 
@@ -1572,7 +1803,7 @@ export function DrawingCanvas({
   // (лупа или рамка выделения), а не тап.
   // В режиме перетаскивания рукояток тап выключен: выделение не должно сбиться случайным касанием.
   const tap = Gesture.Tap()
-    .enabled(tool !== 'none' && !dragMode)
+    .enabled((tool !== 'none' || ucsCreationActive) && !dragMode)
     .runOnJS(true)
     .maxDistance(TAP_MAX_DISTANCE_PX)
     .maxDuration(LONG_PRESS_MS)
@@ -1583,7 +1814,12 @@ export function DrawingCanvas({
     .onEnd((e, success) => {
       if (!success) return;
       const vp = viewport.get();
-      const world = screenToWorld(vp, { x: e.x, y: e.y });
+      if (ucsCreationActive) {
+        const world = screenToWorld(vp, { x: e.x, y: e.y });
+        onUcsTap({ x: roundMm(world.x), y: roundMm(world.y) });
+        return;
+      }
+      const world = screenToDrawing(vp, { x: e.x, y: e.y }, ucsSV.get());
       if (selectTool) {
         // Выделение в два тапа: первый угол уже стоит — этот тап ставит второй,
         // выделяются все фигуры, которые задела рамка, виньетка гаснет.
@@ -1647,7 +1883,7 @@ export function DrawingCanvas({
   const updateTouch = (x: number, y: number) => {
     'worklet';
     const vp = viewport.get();
-    const rawWorld = screenToWorld(vp, { x, y });
+    const rawWorld = screenToDrawing(vp, { x, y }, ucsSV.get());
     const orthoStart = tool === 'segment' || tool === 'xline' ? pendingStartSV.get() : null;
     const world = orthoStart
       ? constrainOrthoPoint(orthoStart, rawWorld, isOrthoEnabledSV.get())
@@ -1723,11 +1959,11 @@ export function DrawingCanvas({
       const m = marquee.get();
       if (!success || !m) return;
       const vp = viewport.get();
-      const a = screenToWorld(vp, { x: m.x0, y: m.y0 });
+      const a = screenToDrawing(vp, { x: m.x0, y: m.y0 }, ucsSV.get());
       const dragged = Math.max(Math.abs(m.x1 - m.x0), Math.abs(m.y1 - m.y0)) > TAP_MAX_DISTANCE_PX;
       if (dragged) {
         // Способ А: рамку растянули — выделяем.
-        const b = screenToWorld(vp, { x: m.x1, y: m.y1 });
+        const b = screenToDrawing(vp, { x: m.x1, y: m.y1 }, ucsSV.get());
         scheduleOnRN(selectInRect, a, b);
       } else {
         // Способ Б: зажали и отпустили на месте — ставим первый угол и ждём второй тап.
@@ -1764,7 +2000,7 @@ export function DrawingCanvas({
     let index = -1;
     let best = HANDLE_HIT_PX;
     for (let i = 0; i < handles.length; i++) {
-      const p = worldToScreen(vp, handles[i]);
+      const p = drawingToScreen(vp, handles[i], ucsSV.get());
       const d = Math.hypot(p.x - x, p.y - y);
       if (d <= best) {
         index = i;
@@ -1802,7 +2038,7 @@ export function DrawingCanvas({
       }
       // Новое касание всегда начинает заново: старое значение grab (если прошлый жест
       // оборвался без onFinalize) не мешает.
-      const w = screenToWorld(vp, { x: t.x, y: t.y });
+      const w = screenToDrawing(vp, { x: t.x, y: t.y }, ucsSV.get());
       grab.set({ index, dx: handles[index].x - w.x, dy: handles[index].y - w.y });
       dragOrigin.set(s);
       dragShape.set(s);
@@ -1812,7 +2048,7 @@ export function DrawingCanvas({
       const s = dragShape.get();
       if (!g || !s) return;
       const vp = viewport.get();
-      const w = screenToWorld(vp, { x: e.x, y: e.y });
+      const w = screenToDrawing(vp, { x: e.x, y: e.y }, ucsSV.get());
       let tx = roundMm(w.x + g.dx);
       let ty = roundMm(w.y + g.dy);
       let objectSnap: Point | null = null;
@@ -1881,7 +2117,7 @@ export function DrawingCanvas({
         return;
       }
       const vp = viewport.get();
-      const world = screenToWorld(vp, { x: t.x, y: t.y });
+      const world = screenToDrawing(vp, { x: t.x, y: t.y }, ucsSV.get());
       const hit = hitTest(selected, world, HIT_TOLERANCE_PX / safeK(vp));
       if (!hit) {
         manager.fail();
@@ -1894,8 +2130,14 @@ export function DrawingCanvas({
     .onUpdate((e) => {
       if (!moveActive.get() || !moveOrigin.get()) return;
       const kk = safeK(viewport.get());
-      // Экранная ось Y направлена вниз, поэтому для чертежа знак дельты обратный.
-      moveOffset.set({ x: e.translationX / kk, y: -e.translationY / kk });
+      const ucs = ucsSV.get();
+      const rad = (ucs.angle * Math.PI) / 180;
+      const worldDx = e.translationX / kk;
+      const worldDy = -e.translationY / kk;
+      moveOffset.set({
+        x: Math.cos(rad) * worldDx + Math.sin(rad) * worldDy,
+        y: -Math.sin(rad) * worldDx + Math.cos(rad) * worldDy,
+      });
     })
     .onEnd((_e, success) => {
       const origin = moveOrigin.get();
@@ -1938,8 +2180,8 @@ export function DrawingCanvas({
       </Group>
 
       {/* Оси — поверх сетки, в px экрана. */}
-      <Line p1={axisXStart} p2={axisXEnd} strokeWidth={AXIS_WIDTH_PX} color={COLORS.axisX} />
-      <Line p1={axisYStart} p2={axisYEnd} strokeWidth={AXIS_WIDTH_PX} color={COLORS.axisY} />
+      <Line p1={axisXStart} p2={axisXEnd} strokeWidth={AXIS_WIDTH_PX} color={canvasColors.axisX} />
+      <Line p1={axisYStart} p2={axisYEnd} strokeWidth={AXIS_WIDTH_PX} color={canvasColors.axisY} />
 
       {/* Фигуры — в мм чертежа. На экран переводит матрица worldMatrix. */}
       <Group matrix={worldMatrix}>
@@ -1977,10 +2219,19 @@ export function DrawingCanvas({
 
   return (
     <GestureDetector gesture={gesture}>
-      <View style={styles.container} onLayout={onLayout}>
-        <Canvas style={styles.canvas}>
+      <View
+        style={[styles.container, { backgroundColor: canvasColors.background }]}
+        onLayout={onLayout}>
+        <Canvas style={[styles.canvas, { backgroundColor: canvasColors.background }]}>
           {scene}
           <Path path={touchDot} style="fill" color={touchDotColor} />
+
+          {/* Активная СК яркая, остальные — полупрозрачные. */}
+          <Path path={ucsInactiveXPath} style="stroke" strokeWidth={1.5} color={COLORS.ucsX} opacity={0.35} />
+          <Path path={ucsInactiveYPath} style="stroke" strokeWidth={1.5} color={COLORS.ucsY} opacity={0.35} />
+          <Path path={ucsActiveXPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsX} />
+          <Path path={ucsActiveYPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsY} />
+          <Path path={ucsDraftPath} style="stroke" strokeWidth={2} color={COLORS.pending} />
 
           {/* Рукоятки выделенной фигуры — синие квадратики с белой обводкой, в px экрана. */}
           <Path path={handlesPath} style="fill" color={COLORS.handle} />
@@ -2018,17 +2269,17 @@ export function DrawingCanvas({
               Рисуется только пока она открыта, иначе чертёж пришлось бы рисовать дважды. */}
           {loupeVisible && (
             <>
-              <Path path={loupeCircle} style="fill" color={COLORS.background} />
+              <Path path={loupeCircle} style="fill" color={canvasColors.background} />
               <Group clip={loupeCircle}>
                 <Group transform={loupeTransform}>{scene}</Group>
                 <Path path={crosshair} style="stroke" strokeWidth={1.5} color={COLORS.crosshair} />
               </Group>
-              <Path path={loupeCircle} style="stroke" strokeWidth={4} color={COLORS.loupeRim} />
+              <Path path={loupeCircle} style="stroke" strokeWidth={4} color={canvasColors.loupeRim} />
               <Path
                 path={loupeOuterCircle}
                 style="stroke"
                 strokeWidth={1}
-                color={COLORS.loupeOuterRim}
+                color={canvasColors.loupeOuterRim}
               />
             </>
           )}
@@ -2041,7 +2292,7 @@ export function DrawingCanvas({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: CANVAS_COLORS.light.background,
   },
   canvas: {
     flex: 1,

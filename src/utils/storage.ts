@@ -2,11 +2,13 @@
 // Файлы лежат в папке документов приложения — их не видно другим программам.
 //
 // projects_index.json — список проектов (id, название, дата последнего изменения);
-// project_{id}.json   — фигуры одного проекта.
+// project_{id}.json   — фигуры и системы координат одного проекта.
 
 import { File, Paths } from 'expo-file-system';
 
 import type { Shape } from '@/types/shapes';
+import type { UCS } from '@/types/ucs';
+import { WCS } from '@/utils/ucs';
 
 const INDEX_FILE_NAME = 'projects_index.json';
 /** Файл единственного проекта из версий до 0.0.0.0011. Переносится в список при первом запуске. */
@@ -31,11 +33,16 @@ type IndexFile = {
 type ProjectFile = {
   version: number;
   shapes: Shape[];
+  activeUcs: UCS;
+  customUcs: UCS[];
 };
 
 export type ProjectLoadResult = {
   /** null — файл ещё не создан; массив — загруженный или восстановленный пустой чертёж. */
   shapes: Shape[] | null;
+  /** В старых файлах без этих полей используются мировая СК и пустой список. */
+  activeUcs: UCS;
+  customUcs: UCS[];
   /** true — повреждённый файл удалён и вместо него создан пустой проект. */
   recovered: boolean;
 };
@@ -168,44 +175,62 @@ export async function getProject(id: string): Promise<ProjectMeta | null> {
 export async function createProject(name: string): Promise<string> {
   const projects = await readIndex();
   const meta: ProjectMeta = { id: makeProjectId(), name, date: new Date().toISOString() };
-  await writeJson(projectFile(meta.id), { version: FORMAT_VERSION, shapes: [] } satisfies ProjectFile);
+  await writeJson(projectFile(meta.id), {
+    version: FORMAT_VERSION,
+    shapes: [],
+    activeUcs: WCS,
+    customUcs: [],
+  } satisfies ProjectFile);
   await writeIndex([...projects, meta]);
   return meta.id;
 }
 
-/** Сохраняет фигуры проекта (старый файл перезаписывается) и обновляет дату изменения. */
-export async function saveProject(id: string, shapes: Shape[]): Promise<void> {
+/** Сохраняет фигуры и системы координат проекта и обновляет дату изменения. */
+export async function saveProject(
+  id: string,
+  shapes: Shape[],
+  activeUcs: UCS = WCS,
+  customUcs: UCS[] = [],
+): Promise<void> {
   const projects = await readIndex();
   if (!projects.some((p) => p.id === id)) {
     throw new Error('Проект не найден — возможно, он был удалён');
   }
-  const data: ProjectFile = { version: FORMAT_VERSION, shapes };
+  const data: ProjectFile = { version: FORMAT_VERSION, shapes, activeUcs, customUcs };
   await writeJson(projectFile(id), data);
   const date = new Date().toISOString();
   await writeIndex(projects.map((p) => (p.id === id ? { ...p, date } : p)));
 }
 
 /**
- * Читает фигуры проекта. При ошибке чтения или разбора JSON удаляет повреждённый файл
- * и создаёт на его месте пустой проект с тем же id, чтобы приложение продолжило работать.
+ * Читает фигуры и системы координат проекта. При ошибке чтения или разбора JSON удаляет
+ * повреждённый файл и создаёт пустой проект с тем же id, чтобы приложение продолжило работать.
  */
 export async function loadProject(id: string): Promise<ProjectLoadResult> {
   const file = projectFile(id);
   await recoverJsonFile(file);
-  if (!file.exists) return { shapes: null, recovered: false };
+  if (!file.exists) return { shapes: null, activeUcs: WCS, customUcs: [], recovered: false };
 
   try {
     const data = JSON.parse(await file.text()) as Partial<ProjectFile>;
     if (!Array.isArray(data.shapes)) {
       throw new Error('В файле проекта нет списка фигур');
     }
-    return { shapes: data.shapes, recovered: false };
+    const customUcs = data.customUcs ?? [];
+    // У старых файлов поля отсутствуют; неизвестная активная СК тоже безопасно заменяется на WCS.
+    const activeUcs = customUcs.find((ucs) => ucs.id === data.activeUcs?.id) ?? WCS;
+    return { shapes: data.shapes, activeUcs, customUcs, recovered: false };
   } catch (error) {
     const readError = errorMessage(error);
 
     try {
       if (file.exists) file.delete();
-      const emptyProject: ProjectFile = { version: FORMAT_VERSION, shapes: [] };
+      const emptyProject: ProjectFile = {
+        version: FORMAT_VERSION,
+        shapes: [],
+        activeUcs: WCS,
+        customUcs: [],
+      };
       await writeJson(file, emptyProject);
     } catch (recoveryError) {
       throw new Error(
@@ -214,7 +239,7 @@ export async function loadProject(id: string): Promise<ProjectLoadResult> {
     }
 
     console.warn(`Повреждённый файл ${file.name} заменён пустым проектом: ${readError}`);
-    return { shapes: [], recovered: true };
+    return { shapes: [], activeUcs: WCS, customUcs: [], recovered: true };
   }
 }
 

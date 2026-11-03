@@ -7,10 +7,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import type { DimensionAxis, Tool } from '@/types/shapes';
+import type { UcsAction } from '@/types/ucs';
+import { WCS } from '@/utils/ucs';
 
 type ActiveTool = Exclude<Tool, 'none'>;
 type IconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
-type CategoryId = 'construction' | 'analysis' | 'editing';
+type CategoryId = 'construction' | 'analysis' | 'editing' | 'coordinates';
 
 type ToolMenuItem = {
   kind: 'tool';
@@ -28,7 +30,14 @@ type ActionMenuItem = {
   icon: IconName;
 };
 
-type MenuItem = ToolMenuItem | ActionMenuItem;
+type UcsMenuItem = {
+  kind: 'ucs';
+  id: UcsAction;
+  label: string;
+  icon: IconName;
+};
+
+type MenuItem = ToolMenuItem | ActionMenuItem | UcsMenuItem;
 
 type Category = {
   id: CategoryId;
@@ -101,9 +110,20 @@ const CATEGORIES: Record<CategoryId, Category> = {
       { kind: 'action', id: 'delete', label: 'Удалить', icon: 'delete-outline' },
     ],
   },
+  coordinates: {
+    id: 'coordinates',
+    label: 'Системы координат',
+    icon: 'axis-arrow',
+    items: [
+      { kind: 'ucs', id: 'wcs', label: 'Мировая СК (WCS)', icon: 'earth' },
+      { kind: 'ucs', id: 'create', label: 'Создать СК', icon: 'plus' },
+      { kind: 'ucs', id: 'delete', label: 'Удалить СК', icon: 'delete-outline' },
+      { kind: 'ucs', id: 'list', label: 'Список СК', icon: 'format-list-bulleted' },
+    ],
+  },
 };
 
-const CATEGORY_ORDER: CategoryId[] = ['construction', 'analysis', 'editing'];
+const CATEGORY_ORDER: CategoryId[] = ['construction', 'analysis', 'editing', 'coordinates'];
 const MENU_ANIMATION_MS = 180;
 const CATEGORY_BUTTON_HEIGHT = 56;
 const TOOLBAR_VERTICAL_PADDING = 8;
@@ -124,6 +144,9 @@ type Props = {
   onCopy: () => void;
   canDelete: boolean;
   onDelete: () => void;
+  activeUcsId: string;
+  ucsCreationActive: boolean;
+  onUcsAction: (action: UcsAction) => void;
 };
 
 type ToolSubmenuProps = Pick<
@@ -136,6 +159,9 @@ type ToolSubmenuProps = Pick<
   | 'onCopy'
   | 'canDelete'
   | 'onDelete'
+  | 'activeUcsId'
+  | 'ucsCreationActive'
+  | 'onUcsAction'
 > & {
   category: Category;
   visible: boolean;
@@ -160,6 +186,9 @@ function ToolSubmenu({
   onCopy,
   canDelete,
   onDelete,
+  activeUcsId,
+  ucsCreationActive,
+  onUcsAction,
   onClose,
 }: ToolSubmenuProps) {
   const { colors } = useTheme();
@@ -176,6 +205,11 @@ function ToolSubmenu({
   }));
 
   const pressItem = (item: MenuItem) => {
+    if (item.kind === 'ucs') {
+      onClose();
+      onUcsAction(item.id);
+      return;
+    }
     if (item.kind === 'action') {
       onClose();
       if (item.id === 'copy') onCopy();
@@ -206,13 +240,19 @@ function ToolSubmenu({
           contentContainerStyle={styles.submenuContent}>
           {category.items.map((item) => {
             const active =
-              item.kind === 'tool' &&
-              item.tool === activeTool &&
-              (item.tool !== 'dimension' || item.axis === dimensionAxis);
+              (item.kind === 'tool' &&
+                item.tool === activeTool &&
+                (item.tool !== 'dimension' || item.axis === dimensionAxis)) ||
+              (item.kind === 'ucs' &&
+                ((item.id === 'wcs' && activeUcsId === WCS.id) ||
+                  (item.id === 'create' && ucsCreationActive)));
             const disabled =
               (item.kind === 'action' && item.id === 'copy' && !canCopy) ||
-              (item.kind === 'action' && item.id === 'delete' && !canDelete);
-            const danger = item.kind === 'action' && item.id === 'delete';
+              (item.kind === 'action' && item.id === 'delete' && !canDelete) ||
+              (item.kind === 'ucs' && item.id === 'delete' && activeUcsId === WCS.id);
+            const danger =
+              (item.kind === 'action' && item.id === 'delete') ||
+              (item.kind === 'ucs' && item.id === 'delete');
             const iconColor = active
               ? colors.accent
               : disabled
@@ -231,13 +271,16 @@ function ToolSubmenu({
                 accessibilityState={{ disabled, selected: active }}
                 style={({ pressed }) => [
                   styles.toolButton,
+                  item.kind === 'ucs' && styles.ucsButton,
                   active && styles.toolButtonActive,
                   danger && !disabled && styles.deleteButton,
                   pressed && !active && !disabled && styles.buttonPressed,
                   disabled && styles.buttonDisabled,
                 ]}>
                 <MaterialCommunityIcons name={item.icon} size={24} color={iconColor} />
-                <Text style={[styles.toolButtonText, { color: iconColor }]} numberOfLines={1}>
+                <Text
+                  style={[styles.toolButtonText, { color: iconColor }]}
+                  numberOfLines={item.kind === 'ucs' ? 2 : 1}>
                   {item.label}
                 </Text>
                 {active && <View style={styles.toolActiveIndicator} />}
@@ -267,6 +310,9 @@ export function Toolbar({
   onCopy,
   canDelete,
   onDelete,
+  activeUcsId,
+  ucsCreationActive,
+  onUcsAction,
 }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -298,6 +344,9 @@ export function Toolbar({
         onCopy={onCopy}
         canDelete={canDelete}
         onDelete={onDelete}
+        activeUcsId={activeUcsId}
+        ucsCreationActive={ucsCreationActive}
+        onUcsAction={onUcsAction}
         onClose={() => setActiveCategory(null)}
       />
 
@@ -312,9 +361,9 @@ export function Toolbar({
         {CATEGORY_ORDER.map((id) => {
           const category = CATEGORIES[id];
           const expanded = activeCategory === id;
-          const containsActiveTool = category.items.some(
-            (item) => item.kind === 'tool' && item.tool === activeTool,
-          );
+          const containsActiveTool =
+            category.items.some((item) => item.kind === 'tool' && item.tool === activeTool) ||
+            (id === 'coordinates' && (activeUcsId !== WCS.id || ucsCreationActive));
           const color = expanded
             ? colors.accent
             : containsActiveTool
@@ -514,6 +563,9 @@ const createStyles = (colors: ThemeColors) =>
       backgroundColor: colors.background,
       borderWidth: 1,
       borderColor: colors.borderSubtle,
+    },
+    ucsButton: {
+      width: 88,
     },
     toolButtonActive: {
       backgroundColor: colors.accentSurface,

@@ -22,6 +22,7 @@ type HistoryAction =
   | { type: 'addMany'; shapes: Shape[] }
   | { type: 'delete'; ids: string[] }
   | { type: 'update'; id: string; shape: Shape }
+  | { type: 'updateMany'; shapes: Shape[] }
   | { type: 'undo' }
   | { type: 'redo' }
   | { type: 'clear' }
@@ -67,6 +68,18 @@ function historyReducer(state: HistoryState, action: HistoryAction): HistoryStat
       const next = [...state.present];
       next[index] = updated;
       return commit(state, next);
+    }
+
+    case 'updateMany': {
+      const updates = new Map(action.shapes.map((s) => [s.id, s]));
+      let changed = false;
+      const next = state.present.map((s) => {
+        const updated = updates.get(s.id);
+        if (!updated) return s;
+        if (JSON.stringify(updated) !== JSON.stringify(s)) changed = true;
+        return updated;
+      });
+      return changed ? commit(state, next) : state;
     }
 
     case 'undo': {
@@ -121,6 +134,10 @@ export function useShapeHistory() {
     (id: string, newShapeData: Shape) => dispatch({ type: 'update', id, shape: newShapeData }),
     [],
   );
+  const updateShapes = useCallback(
+    (newShapes: Shape[]) => dispatch({ type: 'updateMany', shapes: newShapes }),
+    [],
+  );
   const undo = useCallback(() => dispatch({ type: 'undo' }), []);
   const redo = useCallback(() => dispatch({ type: 'redo' }), []);
   const clear = useCallback(() => dispatch({ type: 'clear' }), []);
@@ -135,6 +152,7 @@ export function useShapeHistory() {
     addShapes,
     deleteShapes,
     updateShape,
+    updateShapes,
     undo,
     redo,
     clear,
