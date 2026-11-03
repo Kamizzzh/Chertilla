@@ -20,14 +20,14 @@ import { SelectionVignette } from '@/components/SelectionVignette';
 import { SettingsModal } from '@/components/SettingsModal';
 import { Toolbar } from '@/components/Toolbar';
 import { FLOATING_MARGIN, TopBar } from '@/components/TopBar';
-import { UcsModal } from '@/components/UcsModal';
+import { UcsMethodModal, UcsModal } from '@/components/UcsModal';
 import { XLineMenu } from '@/components/XLineMenu';
 import { CANVAS_COLORS } from '@/constants/canvasTheme';
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import { useShapeHistory } from '@/hooks/useShapeHistory';
 import type { DimensionAxis, LineStyle, Shape, ShapeAppearance, Tool, XLineMode } from '@/types/shapes';
-import type { UCS, UcsAction } from '@/types/ucs';
+import type { UCS, UcsAction, UcsCreationMethod } from '@/types/ucs';
 import { recordAction } from '@/utils/actionHistory';
 import { recordError } from '@/utils/errorLog';
 import { sendFeedback } from '@/utils/feedback';
@@ -126,6 +126,8 @@ const TOOL_NAMES: Record<Tool, string> = {
 const DEFAULT_DIMENSION_OFFSET_MM = 10;
 // Дубликат смещается по обеим осям, чтобы не лежать точно поверх исходной фигуры.
 const COPY_OFFSET_MM = 10;
+// Повторный callback того же отпускания пальца не должен создавать вторую СК.
+const UCS_TAP_DEBOUNCE_MS = 300;
 
 const DEFAULT_LINE_COLORS: Record<LineStyle, string | null> = {
   solid_thick: null,
@@ -273,8 +275,11 @@ export default function ProjectScreen() {
     savedShapes !== null &&
     (shapes !== savedShapes || ucsList !== savedUcsList || activeUcsId !== savedActiveUcsId);
   const [ucsCreationActive, setUcsCreationActive] = useState(false);
+  const [ucsCreationMethod, setUcsCreationMethod] = useState<UcsCreationMethod>('xAxis');
   const [ucsOrigin, setUcsOrigin] = useState<Point | null>(null);
+  const [ucsMethodModalVisible, setUcsMethodModalVisible] = useState(false);
   const [ucsModalVisible, setUcsModalVisible] = useState(false);
+  const lastUcsTapAtRef = useRef(0);
 
   // Открыто ли окно ввода координат.
   const [coordModalVisible, setCoordModalVisible] = useState(false);
@@ -354,6 +359,7 @@ export default function ProjectScreen() {
     setDivideModalVisible(false);
     setUcsCreationActive(false);
     setUcsOrigin(null);
+    setUcsMethodModalVisible(false);
   };
 
   /** Создаёт обычную точку в выбранном месте пересечения и начинает выбор заново. */
@@ -499,12 +505,13 @@ export default function ProjectScreen() {
       activateUcs(WCS.id);
       setUcsCreationActive(false);
       setUcsOrigin(null);
+      setUcsMethodModalVisible(false);
       recordAction('Активна мировая система координат');
     } else if (action === 'create') {
       selectTool('none');
-      setUcsCreationActive(true);
+      setUcsCreationActive(false);
       setUcsOrigin(null);
-      recordAction('Начато создание системы координат');
+      setUcsMethodModalVisible(true);
     } else if (action === 'delete') {
       deleteUcs(activeUcsId);
     } else {
@@ -512,29 +519,52 @@ export default function ProjectScreen() {
     }
   };
 
-  const handleUcsTap = (p: Point) => {
-    if (!ucsCreationActive) return;
-    if (!ucsOrigin) {
-      setUcsOrigin(p);
-      return;
-    }
-    if (samePoint(p, ucsOrigin)) return;
-    const angle = (Math.atan2(p.y - ucsOrigin.y, p.x - ucsOrigin.x) * 180) / Math.PI;
+  const startUcsCreation = (method: UcsCreationMethod) => {
+    lastUcsTapAtRef.current = 0;
+    setUcsCreationMethod(method);
+    setUcsMethodModalVisible(false);
+    setUcsCreationActive(true);
+    setUcsOrigin(null);
+    recordAction(
+      method === 'originOnly'
+        ? 'Начато создание СК одной точкой'
+        : 'Начато создание СК по направлению оси X',
+    );
+  };
+
+  const createUcs = (origin: Point, angle: number) => {
     const number = nextUcsId++;
     const created: UCS = {
       id: `ucs-${number}`,
       name: `СК ${number}`,
-      dx: roundMm(ucsOrigin.x),
-      dy: roundMm(ucsOrigin.y),
-      // Чертёж поворачивается на -angle, поэтому выбранное направление становится
-      // горизонтальной осью X. Инверсия Y уже учтена в worldToScreen — второй минус не нужен.
-      angle: roundAngle(-angle),
+      dx: roundMm(origin.x),
+      dy: roundMm(origin.y),
+      angle: roundAngle(angle),
     };
     setUcsList((current) => [...current, created]);
     activateUcs(created.id);
     setUcsCreationActive(false);
     setUcsOrigin(null);
     recordAction(`Создана система координат: ${created.name}`);
+  };
+
+  const handleUcsTap = (p: Point) => {
+    if (!ucsCreationActive) return;
+    const now = Date.now();
+    if (now - lastUcsTapAtRef.current < UCS_TAP_DEBOUNCE_MS) return;
+    lastUcsTapAtRef.current = now;
+    if (ucsCreationMethod === 'originOnly') {
+      createUcs(p, 0);
+      return;
+    }
+    if (!ucsOrigin) {
+      setUcsOrigin(p);
+      return;
+    }
+    if (samePoint(p, ucsOrigin)) return;
+    // Обе точки уже находятся в абсолютной WCS; никакого поворота координат перед atan2 нет.
+    const angle = (Math.atan2(p.y - ucsOrigin.y, p.x - ucsOrigin.x) * 180) / Math.PI;
+    createUcs(ucsOrigin, angle);
   };
 
   // Кнопки панели действий с выделенными фигурами.
@@ -742,6 +772,7 @@ export default function ProjectScreen() {
       setEditMode('none');
       setUcsCreationActive(false);
       setUcsOrigin(null);
+      setUcsMethodModalVisible(false);
       setUcsList(loadedUcsList);
       setActiveUcsId(result.activeUcs.id);
       setUcsActivationStack(
@@ -1342,6 +1373,11 @@ export default function ProjectScreen() {
 
       <ErrorLogModal visible={errorLogVisible} onClose={() => setErrorLogVisible(false)} />
       <SettingsModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} />
+      <UcsMethodModal
+        visible={ucsMethodModalVisible}
+        onSelect={startUcsCreation}
+        onClose={() => setUcsMethodModalVisible(false)}
+      />
       <UcsModal
         visible={ucsModalVisible}
         systems={ucsList}

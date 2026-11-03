@@ -7,3 +7,6 @@ export type UCS = {
 };
 
 export type UcsAction = 'wcs' | 'create' | 'delete' | 'list';
+
+/** originOnly — один тап по центру без поворота; xAxis — центр и направление оси X. */
+export type UcsCreationMethod = 'originOnly' | 'xAxis';

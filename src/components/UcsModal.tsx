@@ -4,7 +4,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
-import type { UCS } from '@/types/ucs';
+import type { UCS, UcsCreationMethod } from '@/types/ucs';
 
 type Props = {
   visible: boolean;
@@ -113,6 +113,60 @@ export function UcsModal({ visible, systems, activeId, onSelect, onDelete, onClo
               })}
             </ScrollView>
           )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+type UcsMethodModalProps = {
+  visible: boolean;
+  onSelect: (method: UcsCreationMethod) => void;
+  onClose: () => void;
+};
+
+/** Выбор способа создания СК: только смещение или смещение с направлением оси X. */
+export function UcsMethodModal({ visible, onSelect, onClose }: UcsMethodModalProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onClose}>
+      <View style={styles.backdrop}>
+        <View style={[styles.card, styles.methodCard]}>
+          <Text accessibilityRole="header" style={styles.title}>
+            Способ создания СК
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Смещение. Только точка 0,0"
+            onPress={() => onSelect('originOnly')}
+            style={({ pressed }) => [styles.methodOption, pressed && styles.rowContentPressed]}>
+            <Text style={styles.name}>Смещение (Только точка 0,0)</Text>
+            <Text style={styles.methodDescription}>Один тап по центру, угол 0°</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="По направлению оси X"
+            onPress={() => onSelect('xAxis')}
+            style={({ pressed }) => [styles.methodOption, pressed && styles.rowContentPressed]}>
+            <Text style={styles.name}>По направлению оси X</Text>
+            <Text style={styles.methodDescription}>Центр, затем направление оси X</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onClose}
+            style={({ pressed }) => [
+              styles.methodCancel,
+              pressed && styles.closeButtonPressed,
+            ]}>
+            <Text style={styles.methodCancelText}>Отмена</Text>
+          </Pressable>
         </View>
       </View>
     </Modal>
@@ -231,5 +285,32 @@ const createStyles = (colors: ThemeColors) =>
     },
     deleteButtonPressed: {
       backgroundColor: colors.dangerSurface,
+    },
+    methodCard: {
+      gap: 12,
+    },
+    methodOption: {
+      gap: 4,
+      padding: 14,
+      borderRadius: 10,
+      backgroundColor: colors.surfaceSecondary,
+      borderWidth: 1,
+      borderColor: colors.borderSubtle,
+    },
+    methodDescription: {
+      fontSize: 13,
+      lineHeight: 18,
+      color: colors.textMuted,
+    },
+    methodCancel: {
+      alignItems: 'center',
+      paddingVertical: 10,
+      borderRadius: 8,
+      backgroundColor: colors.surfaceSecondary,
+    },
+    methodCancelText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.textSecondary,
     },
   });

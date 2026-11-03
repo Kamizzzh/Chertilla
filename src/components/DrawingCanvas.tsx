@@ -61,7 +61,7 @@ import { hitTest, shapesInRect } from '@/utils/hitTest';
 import { canIntersect } from '@/utils/intersection';
 import { findSnapPoint, type SnapResult } from '@/utils/snap';
 import { translateShape } from '@/utils/shapeTransform';
-import { drawingToScreen, screenToDrawing, ucsToWorld } from '@/utils/ucs';
+import { drawingToScreen, screenToDrawing } from '@/utils/ucs';
 import { addWavyArc, addWavySegment } from '@/utils/wavyPath';
 import {
   clampScale,
@@ -70,9 +70,7 @@ import {
   PX_PER_MM,
   pxPerMm,
   roundMm,
-  screenToWorld,
   snapToGridMm,
-  worldToScreen,
   type Point,
   type Viewport,
 } from '@/utils/viewport';
@@ -347,7 +345,7 @@ function toLocal(px: number, k: number): number {
   return w > 0 && Number.isFinite(w) ? w : 1;
 }
 
-/** Видимая область в локальных мм активной СК; при повороте учитываются все 4 угла. */
+/** Видимая область в мировых мм; при повороте активной СК учитываются все 4 угла. */
 function visibleRect(vp: Viewport, ucs: UCS) {
   'worklet';
   const corners = [
@@ -1132,10 +1130,10 @@ function addUcsArrow(
   path.close();
 }
 
-/** Точка лупы: при создании СК она мировая, при построении — локальная активной СК. */
-function touchTargetToScreen(vp: Viewport, p: Point, ucs: UCS, ucsCreation: boolean): Point {
+/** Точка лупы хранится в WCS и проходит через ту же обратную матрицу СК, что и холст. */
+function touchTargetToScreen(vp: Viewport, p: Point, ucs: UCS): Point {
   'worklet';
-  return ucsCreation ? worldToScreen(vp, p) : drawingToScreen(vp, p, ucs);
+  return drawingToScreen(vp, p, ucs);
 }
 
 export function DrawingCanvas({
@@ -1256,6 +1254,11 @@ export function DrawingCanvas({
   // Показана ли лупа. Пока её нет, второй экземпляр чертежа (внутри лупы)
   // вообще не попадает на холст и не тратит время на отрисовку.
   const [loupeVisible, setLoupeVisible] = useState(false);
+  useEffect(() => {
+    if (ucsCreationActive) return;
+    // После создания или отмены не оставляем точку лупы и пунктир будущей оси.
+    touch.set(null);
+  }, [ucsCreationActive, touch]);
 
   // Один пустой путь на всё время жизни холста: его возвращают маркеры и лупа,
   // пока палец не на экране, — без создания новых объектов на каждом кадре.
@@ -1285,11 +1288,11 @@ export function DrawingCanvas({
     const rad = (ucs.angle * Math.PI) / 180;
     const c = Math.cos(rad);
     const s = Math.sin(rad);
-    // V · U: сначала локальная СК поворачивается и смещается, затем вид (мм -> px, Y вниз).
-    const tx = vp.width / 2 + vp.translateX + kk * ucs.dx;
-    const ty = vp.height / 2 + vp.translateY - kk * ucs.dy;
+    // V · U⁻¹: мировой чертёж поворачивается обратно, инверсия Y остаётся только в V.
+    const tx = vp.width / 2 + vp.translateX - kk * (c * ucs.dx + s * ucs.dy);
+    const ty = vp.height / 2 + vp.translateY + kk * (c * ucs.dy - s * ucs.dx);
     if (![tx, ty, c, s].every(Number.isFinite)) return IDENTITY;
-    return [kk * c, -kk * s, tx, -kk * s, -kk * c, ty, 0, 0, 1];
+    return [kk * c, kk * s, tx, kk * s, -kk * c, ty, 0, 0, 1];
   });
 
   // --- Сетка: плитка (Skia Picture) записывается только при изменении размера холста ---
@@ -1335,51 +1338,50 @@ export function DrawingCanvas({
       y: Math.round(center.y / periodMm) * periodMm,
     };
     const origin = drawingToScreen(vp, anchor, ucs);
-    const rad = (ucs.angle * Math.PI) / 180;
+    // Обратный поворот активной СК, как в worldMatrix; инверсия Y задана знаками ниже.
+    const rad = (-ucs.angle * Math.PI) / 180;
     const c = Math.cos(rad);
     const sn = Math.sin(rad);
     if (!(stepPx > 0) || ![origin.x, origin.y, c, sn].every(Number.isFinite)) return IDENTITY;
     return [kk * c * stepMm, -kk * sn * stepMm, origin.x, -kk * sn * stepMm, -kk * c * stepMm, origin.y, 0, 0, 1];
   });
 
-  // --- Оси активной СК: проходят через её начало и повернуты вместе с чертежом ---
+  // --- Оси активной СК: после обратной матрицы её X горизонтальна, Y вертикальна ---
   const ucsOriginScreen = useDerivedValue(() => {
+    const vp = viewport.get();
     const ucs = ucsSV.get();
-    return worldToScreen(viewport.get(), { x: ucs.dx, y: ucs.dy });
+    return drawingToScreen(vp, { x: ucs.dx, y: ucs.dy }, ucs);
   });
   const axisXStart = useDerivedValue(() => {
     const vp = viewport.get();
     const o = ucsOriginScreen.get();
-    const rad = (ucsSV.get().angle * Math.PI) / 180;
     const length = Math.hypot(vp.width, vp.height);
-    return vec(o.x - Math.cos(rad) * length, o.y + Math.sin(rad) * length);
+    return vec(o.x - length, o.y);
   });
   const axisXEnd = useDerivedValue(() => {
     const vp = viewport.get();
     const o = ucsOriginScreen.get();
-    const rad = (ucsSV.get().angle * Math.PI) / 180;
     const length = Math.hypot(vp.width, vp.height);
-    return vec(o.x + Math.cos(rad) * length, o.y - Math.sin(rad) * length);
+    return vec(o.x + length, o.y);
   });
   const axisYStart = useDerivedValue(() => {
     const vp = viewport.get();
     const o = ucsOriginScreen.get();
-    const rad = (ucsSV.get().angle * Math.PI) / 180;
     const length = Math.hypot(vp.width, vp.height);
-    return vec(o.x + Math.sin(rad) * length, o.y + Math.cos(rad) * length);
+    return vec(o.x, o.y + length);
   });
   const axisYEnd = useDerivedValue(() => {
     const vp = viewport.get();
     const o = ucsOriginScreen.get();
-    const rad = (ucsSV.get().angle * Math.PI) / 180;
     const length = Math.hypot(vp.width, vp.height);
-    return vec(o.x - Math.sin(rad) * length, o.y - Math.cos(rad) * length);
+    return vec(o.x, o.y - length);
   });
 
   // Метки СК рисуются в местах их установки; размер осей задан в px экрана.
   const ucsMarkers = useDerivedValue(() => {
     const vp = viewport.get();
-    const activeId = ucsSV.get().id;
+    const activeUcs = ucsSV.get();
+    const activeId = activeUcs.id;
     const activeX = Skia.PathBuilder.Make();
     const activeY = Skia.PathBuilder.Make();
     const inactiveX = Skia.PathBuilder.Make();
@@ -1388,8 +1390,9 @@ export function DrawingCanvas({
       const active = ucs.id === activeId;
       const xPath = active ? activeX : inactiveX;
       const yPath = active ? activeY : inactiveY;
-      const o = worldToScreen(vp, { x: ucs.dx, y: ucs.dy });
-      const rad = (ucs.angle * Math.PI) / 180;
+      const o = drawingToScreen(vp, { x: ucs.dx, y: ucs.dy }, activeUcs);
+      // Относительный поворот: у активной СК он равен нулю, её оси остаются ровными.
+      const rad = ((ucs.angle - activeUcs.angle) * Math.PI) / 180;
       const length = active ? 52 : 38;
       const xDirection = { x: Math.cos(rad), y: -Math.sin(rad) };
       const yDirection = { x: -Math.sin(rad), y: -Math.cos(rad) };
@@ -1417,7 +1420,7 @@ export function DrawingCanvas({
   const ucsDraftPath = useDerivedValue(() => {
     const origin = ucsOriginSV.get();
     if (!origin || !ucsCreationActive) return noPath;
-    const o = worldToScreen(viewport.get(), origin);
+    const o = drawingToScreen(viewport.get(), origin, ucsSV.get());
     const path = Skia.PathBuilder.Make();
     path.addCircle(o.x, o.y, 8);
     path.moveTo(o.x - 14, o.y);
@@ -1434,8 +1437,9 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!origin || !t || !ucsCreationActive) return noPath;
     const vp = viewport.get();
-    const a = worldToScreen(vp, origin);
-    const b = worldToScreen(vp, t.target);
+    const ucs = ucsSV.get();
+    const a = drawingToScreen(vp, origin, ucs);
+    const b = drawingToScreen(vp, t.target, ucs);
     const path = Skia.PathBuilder.Make();
     path.moveTo(a.x, a.y);
     path.lineTo(b.x, b.y);
@@ -1665,7 +1669,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t || !t.snap) return noPath;
     const path = Skia.PathBuilder.Make();
-    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get(), ucsCreationActive);
+    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get());
     const h = SNAP_MARKER_HALF_PX;
     if (t.snap.kind === 'midpoint') {
       path.moveTo(p.x, p.y - h);
@@ -1689,7 +1693,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t) return noPath;
     const path = Skia.PathBuilder.Make();
-    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get(), ucsCreationActive);
+    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get());
     path.addCircle(p.x, p.y, TOUCH_DOT_RADIUS_PX);
     return path.build();
   });
@@ -1726,7 +1730,7 @@ export function DrawingCanvas({
     const t = touch.get();
     if (!t) return NO_TRANSFORM;
     const c = loupeCenter.get();
-    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get(), ucsCreationActive);
+    const p = touchTargetToScreen(viewport.get(), t.target, ucsSV.get());
     return [
       { translateX: c.x },
       { translateY: c.y },
@@ -1905,18 +1909,12 @@ export function DrawingCanvas({
       const vp = viewport.get();
       if (ucsCreationActive) {
         const screenPoint = { x: e.x, y: e.y };
-        const world = screenToWorld(vp, screenPoint);
-        let target = { x: roundMm(world.x), y: roundMm(world.y) };
-        if (ucsOrigin) {
-          // Короткий тап использует ту же объектную привязку, что и лупа.
-          // Фигуры хранятся в активной СК, а новая СК задаётся в мировых координатах.
-          const drawingPoint = screenToDrawing(vp, screenPoint, activeUCS);
-          const snap = findSnapPoint(shapes, drawingPoint, SNAP_RADIUS_PX / safeK(vp));
-          if (snap) {
-            const snappedWorld = ucsToWorld(snap.p, activeUCS);
-            target = { x: roundMm(snappedWorld.x), y: roundMm(snappedWorld.y) };
-          }
-        }
+        // Экран переводится в WCS один раз; фигуры и привязка уже используют WCS.
+        const worldPoint = screenToDrawing(vp, screenPoint, activeUCS);
+        const snap = findSnapPoint(shapes, worldPoint, SNAP_RADIUS_PX / safeK(vp));
+        const point = snap ? snap.p : worldPoint;
+        const target = { x: roundMm(point.x), y: roundMm(point.y) };
+        touch.set(null);
         onUcsTap(target);
         return;
       }
@@ -1985,25 +1983,17 @@ export function DrawingCanvas({
     'worklet';
     const vp = viewport.get();
     const ucs = ucsSV.get();
-    const rawWorld = ucsCreationActive
-      ? screenToWorld(vp, { x, y })
-      : screenToDrawing(vp, { x, y }, ucs);
+    // Единственное преобразование экранной точки в WCS, включая активную СК.
+    const worldPoint = screenToDrawing(vp, { x, y }, ucs);
     if (ucsCreationActive) {
-      // На втором тапе ищем привязку в локальных координатах фигур, а результат
-      // возвращаем в мировые: именно из мировых точек экран считает угол новой СК.
-      let snap: SnapResult | null = null;
-      if (ucsOriginSV.get()) {
-        const drawingPoint = screenToDrawing(vp, { x, y }, ucs);
-        const localSnap = findSnapPoint(shapesSV.get(), drawingPoint, SNAP_RADIUS_PX / safeK(vp));
-        if (localSnap) snap = { ...localSnap, p: ucsToWorld(localSnap.p, ucs) };
-      }
-      touch.set({ finger: { x, y }, target: snap ? snap.p : rawWorld, snap });
+      const snap = findSnapPoint(shapesSV.get(), worldPoint, SNAP_RADIUS_PX / safeK(vp));
+      touch.set({ finger: { x, y }, target: snap ? snap.p : worldPoint, snap });
       return;
     }
     const orthoStart = tool === 'segment' || tool === 'xline' ? pendingStartSV.get() : null;
     const world = orthoStart
-      ? constrainOrthoPoint(orthoStart, rawWorld, isOrthoEnabledSV.get())
-      : rawWorld;
+      ? constrainOrthoPoint(orthoStart, worldPoint, isOrthoEnabledSV.get())
+      : worldPoint;
     // Орто ограничивает точку ДО поиска привязки, чтобы оба режима работали с одной точкой.
     const snap = findSnapPoint(shapesSV.get(), world, SNAP_RADIUS_PX / pxPerMm(vp));
     // Нет привязки к объекту, но включена сетка — перекрестие встаёт в узел сетки.
@@ -2043,8 +2033,14 @@ export function DrawingCanvas({
       const t = touch.get();
       if (!success || !t) return;
       const target = { x: roundMm(t.target.x), y: roundMm(t.target.y) };
-      if (ucsCreationActive) scheduleOnRN(onUcsTap, target);
-      else scheduleOnRN(onTap, target);
+      if (ucsCreationActive) {
+        // Временная графика исчезает сразу, а обработчик создания вызывается один раз.
+        touch.set(null);
+        scheduleOnRN(setLoupeVisible, false);
+        scheduleOnRN(onUcsTap, target);
+      } else {
+        scheduleOnRN(onTap, target);
+      }
     })
     .onFinalize(() => {
       // Жест лупы заканчивается и у каждого короткого тапа — тогда лупы и не было,
@@ -2259,9 +2255,10 @@ export function DrawingCanvas({
       const rad = (ucs.angle * Math.PI) / 180;
       const worldDx = e.translationX / kk;
       const worldDy = -e.translationY / kk;
+      // Обратно к screenToDrawing: экранная дельта переводится в WCS прямым поворотом СК.
       moveOffset.set({
-        x: Math.cos(rad) * worldDx + Math.sin(rad) * worldDy,
-        y: -Math.sin(rad) * worldDx + Math.cos(rad) * worldDy,
+        x: Math.cos(rad) * worldDx - Math.sin(rad) * worldDy,
+        y: Math.sin(rad) * worldDx + Math.cos(rad) * worldDy,
       });
     })
     .onEnd((_e, success) => {
@@ -2357,12 +2354,12 @@ export function DrawingCanvas({
           {/* Активная СК яркая, остальные — полупрозрачные; концы осей — треугольники. */}
           <Path path={ucsInactiveXPath} style="fill" color={COLORS.ucsX} opacity={0.35} />
           <Path path={ucsInactiveYPath} style="fill" color={COLORS.ucsY} opacity={0.35} />
-          <Path path={ucsActiveXPath} style="fill" color={COLORS.ucsX} />
-          <Path path={ucsActiveYPath} style="fill" color={COLORS.ucsY} />
+          <Path path={ucsActiveXPath} style="fill" color={COLORS.ucsX} opacity={1} />
+          <Path path={ucsActiveYPath} style="fill" color={COLORS.ucsY} opacity={1} />
           <Path path={ucsInactiveXPath} style="stroke" strokeWidth={1.5} color={COLORS.ucsX} opacity={0.35} />
           <Path path={ucsInactiveYPath} style="stroke" strokeWidth={1.5} color={COLORS.ucsY} opacity={0.35} />
-          <Path path={ucsActiveXPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsX} />
-          <Path path={ucsActiveYPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsY} />
+          <Path path={ucsActiveXPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsX} opacity={1} />
+          <Path path={ucsActiveYPath} style="stroke" strokeWidth={2.5} color={COLORS.ucsY} opacity={1} />
           <Path path={ucsAxisPreviewPath} style="stroke" strokeWidth={2} color={COLORS.ucsX}>
             <DashPathEffect intervals={UCS_PREVIEW_DASH_PX} />
           </Path>
@@ -2402,7 +2399,7 @@ export function DrawingCanvas({
 
           {/* Лупа: белый круг, внутри — увеличенный чертёж и перекрестие.
               Рисуется только пока она открыта, иначе чертёж пришлось бы рисовать дважды. */}
-          {loupeVisible && (
+          {loupeVisible && (drawingTool || ucsCreationActive) && (
             <>
               <Path path={loupeCircle} style="fill" color={canvasColors.background} />
               <Group clip={loupeCircle}>

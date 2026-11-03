@@ -23,12 +23,14 @@ export function worldToUcs(p: Point, ucs: UCS): Point {
   return { x: c * x + s * y, y: -s * x + c * y };
 }
 
+/** Мировые координаты фигуры -> экран через обратную матрицу активной СК. */
 export function drawingToScreen(vp: Viewport, p: Point, ucs: UCS): Point {
   'worklet';
-  return worldToScreen(vp, ucsToWorld(p, ucs));
+  return worldToScreen(vp, worldToUcs(p, ucs));
 }
 
+/** Экран -> мировые координаты: инверсия Y выполняется один раз в screenToWorld. */
 export function screenToDrawing(vp: Viewport, p: Point, ucs: UCS): Point {
   'worklet';
-  return worldToUcs(screenToWorld(vp, p), ucs);
+  return ucsToWorld(screenToWorld(vp, p), ucs);
 }
