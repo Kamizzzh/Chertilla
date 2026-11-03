@@ -33,6 +33,13 @@ type ProjectFile = {
   shapes: Shape[];
 };
 
+export type ProjectLoadResult = {
+  /** null — файл ещё не создан; массив — загруженный или восстановленный пустой чертёж. */
+  shapes: Shape[] | null;
+  /** true — повреждённый файл удалён и вместо него создан пустой проект. */
+  recovered: boolean;
+};
+
 function indexFile(): File {
   return new File(Paths.document, INDEX_FILE_NAME);
 }
@@ -179,19 +186,36 @@ export async function saveProject(id: string, shapes: Shape[]): Promise<void> {
 }
 
 /**
- * Читает фигуры проекта.
- * Возвращает null, если файла проекта нет. Если файл повреждён — бросает ошибку.
+ * Читает фигуры проекта. При ошибке чтения или разбора JSON удаляет повреждённый файл
+ * и создаёт на его месте пустой проект с тем же id, чтобы приложение продолжило работать.
  */
-export async function loadProject(id: string): Promise<Shape[] | null> {
+export async function loadProject(id: string): Promise<ProjectLoadResult> {
   const file = projectFile(id);
   await recoverJsonFile(file);
-  if (!file.exists) return null;
+  if (!file.exists) return { shapes: null, recovered: false };
 
-  const data = JSON.parse(await file.text()) as Partial<ProjectFile>;
-  if (!Array.isArray(data.shapes)) {
-    throw new Error('В файле проекта нет списка фигур');
+  try {
+    const data = JSON.parse(await file.text()) as Partial<ProjectFile>;
+    if (!Array.isArray(data.shapes)) {
+      throw new Error('В файле проекта нет списка фигур');
+    }
+    return { shapes: data.shapes, recovered: false };
+  } catch (error) {
+    const readError = errorMessage(error);
+
+    try {
+      if (file.exists) file.delete();
+      const emptyProject: ProjectFile = { version: FORMAT_VERSION, shapes: [] };
+      await writeJson(file, emptyProject);
+    } catch (recoveryError) {
+      throw new Error(
+        `Файл проекта повреждён (${readError}); не удалось создать пустой проект: ${errorMessage(recoveryError)}`,
+      );
+    }
+
+    console.warn(`Повреждённый файл ${file.name} заменён пустым проектом: ${readError}`);
+    return { shapes: [], recovered: true };
   }
-  return data.shapes;
 }
 
 /** Удаляет проект: убирает его из списка и стирает файл с фигурами. */

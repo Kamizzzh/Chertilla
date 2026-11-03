@@ -14,9 +14,11 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { OnboardingModal } from '@/components/OnboardingModal';
 import type { ThemeColors } from '@/constants/theme';
 import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 import { deleteLastCrash, initErrorLogger, readLastCrash, sendToTelegram } from '@/utils/logger';
+import { isOnboardingDone, markOnboardingDone } from '@/utils/onboarding';
 
 void SplashScreen.preventAutoHideAsync();
 SplashScreen.setOptions({ duration: 250, fade: true });
@@ -28,6 +30,8 @@ function RootLayoutContent() {
   const [crashText, setCrashText] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [onboardingVisible, setOnboardingVisible] = useState(false);
+  const [isOnboardingFinishing, setIsOnboardingFinishing] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -35,7 +39,18 @@ function RootLayoutContent() {
     const prepareApp = async () => {
       try {
         initErrorLogger();
-        const savedCrash = await readLastCrash();
+
+        try {
+          if (isMounted && !isOnboardingDone()) setOnboardingVisible(true);
+        } catch (error) {
+          console.warn('Не удалось проверить прохождение онбординга', error);
+          if (isMounted) setOnboardingVisible(true);
+        }
+
+        const savedCrash = await readLastCrash().catch((error: unknown) => {
+          console.warn('Не удалось прочитать отчёт о предыдущем краше', error);
+          return null;
+        });
         if (isMounted && savedCrash !== null) setCrashText(savedCrash);
       } catch (error) {
         console.warn('Не удалось завершить инициализацию приложения', error);
@@ -87,6 +102,21 @@ function RootLayoutContent() {
       setActionError('Отправка не удалась. Скопируйте текст вручную.');
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const handleOnboardingFinish = async () => {
+    if (isOnboardingFinishing) return;
+    setIsOnboardingFinishing(true);
+
+    try {
+      await markOnboardingDone();
+    } catch (error) {
+      // Не блокируем приложение: при ошибке записи обучение просто появится снова.
+      console.warn('Не удалось сохранить прохождение онбординга', error);
+    } finally {
+      setOnboardingVisible(false);
+      setIsOnboardingFinishing(false);
     }
   };
 
@@ -144,6 +174,12 @@ function RootLayoutContent() {
           </View>
         </View>
       </Modal>
+
+      <OnboardingModal
+        visible={isAppReady && onboardingVisible && crashText === null}
+        isFinishing={isOnboardingFinishing}
+        onFinish={() => void handleOnboardingFinish()}
+      />
 
       {!isAppReady && (
         <View style={styles.splashOverlay}>

@@ -18,7 +18,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.chertilla.app"
+      "package": "com.chertilla.app",
+      "enableProguardInReleaseBuilds": true
     },
     "web": {
       "output": "server",
@@ -45,6 +46,14 @@
             "-Dkotlin.daemon.jvm.options=-Xmx2g",
             "-Dfile.encoding=UTF-8"
           ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableMinifyInReleaseBuilds": true
+          }
         }
       ]
     ],

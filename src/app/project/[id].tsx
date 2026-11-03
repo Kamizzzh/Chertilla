@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, BackHandler, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, BackHandler, Keyboard, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -30,7 +30,7 @@ import { computeIntersection } from '@/utils/intersection';
 import { parseNumber } from '@/utils/number';
 import { shareDrawing, type ExportFormat } from '@/utils/shareExport';
 import { translateShape } from '@/utils/shapeTransform';
-import { getProject, loadProject, saveProject } from '@/utils/storage';
+import { getProject, loadProject, saveProject, type ProjectLoadResult } from '@/utils/storage';
 import { roundMm, type Point } from '@/utils/viewport';
 
 // Простой счётчик для уникальных id фигур.
@@ -201,6 +201,8 @@ export default function ProjectScreen() {
   const [marqueePending, setMarqueePending] = useState(false);
 
   const [projectName, setProjectName] = useState('');
+  // Показывается после автоматической замены повреждённого файла пустым проектом.
+  const [recoveryNoticeVisible, setRecoveryNoticeVisible] = useState(false);
   // Фигуры на момент последнего сохранения или загрузки. null — проект ещё загружается.
   // Сравнение по ссылке: «Отменить» до сохранённого состояния возвращает тот же массив,
   // поэтому чертёж снова считается сохранённым.
@@ -560,8 +562,8 @@ export default function ProjectScreen() {
 
   /** Показывает фигуры, прочитанные из файла (история действий начинается заново). */
   const applyLoaded = useCallback(
-    (loaded: Shape[] | null) => {
-      const list = loaded ?? []; // файла нет — проект пустой
+    (result: ProjectLoadResult) => {
+      const list = result.shapes ?? []; // файла нет — проект пустой
       continueIdsAfter(list);
       setPendingStart(null);
       setPendingMiddle(null);
@@ -572,7 +574,12 @@ export default function ProjectScreen() {
       setEditMode('none');
       setShapes(list); // заодно очищает историю: «Отменить» не откатит загрузку
       setSavedShapes(list);
-      recordAction(`Загружен проект: ${list.length} фигур`);
+      setRecoveryNoticeVisible(result.recovered);
+      recordAction(
+        result.recovered
+          ? 'Повреждённый файл заменён пустым проектом'
+          : `Загружен проект: ${list.length} фигур`,
+      );
     },
     [setShapes],
   );
@@ -586,9 +593,8 @@ export default function ProjectScreen() {
     }
   };
 
-  // Открыли экран — загружаем название и фигуры проекта.
-  // Если файл не прочитался — возвращаемся в меню: пустой холст поверх
-  // повреждённого проекта легко случайно сохранить и потерять старый чертёж.
+  // Открыли экран — загружаем название и фигуры проекта. Повреждённый JSON
+  // storage.ts заменяет пустым проектом; при другой ошибке возвращаемся в меню.
   useEffect(() => {
     getProject(id)
       .then((meta) => setProjectName(meta?.name ?? 'Без названия'))
@@ -1115,6 +1121,28 @@ export default function ProjectScreen() {
         />
       )}
 
+      <Modal
+        visible={recoveryNoticeVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRecoveryNoticeVisible(false)}>
+        <View style={styles.recoveryBackdrop}>
+          <View style={styles.recoveryCard}>
+            <Text style={styles.recoveryTitle}>Восстановление проекта</Text>
+            <Text style={styles.recoveryText}>Файл чертежа поврежден. Создан пустой проект</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setRecoveryNoticeVisible(false)}
+              style={({ pressed }) => [
+                styles.recoveryButton,
+                pressed && styles.recoveryButtonPressed,
+              ]}>
+              <Text style={styles.recoveryButtonText}>Понятно</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <DivideModal
         visible={divideModalVisible && divideTarget !== null}
         shapeName={divideTarget ? SHAPE_NAMES[divideTarget.type] : 'фигура'}
@@ -1263,6 +1291,48 @@ const createStyles = (colors: ThemeColors) =>
     },
     actionButtonTextDanger: {
       color: colors.dangerText,
+    },
+    recoveryBackdrop: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+      backgroundColor: colors.overlay,
+    },
+    recoveryCard: {
+      width: '100%',
+      maxWidth: 380,
+      padding: 20,
+      gap: 16,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.borderSubtle,
+    },
+    recoveryTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    recoveryText: {
+      fontSize: 15,
+      lineHeight: 22,
+      color: colors.textSecondary,
+    },
+    recoveryButton: {
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 8,
+      backgroundColor: colors.primary,
+    },
+    recoveryButtonPressed: {
+      backgroundColor: colors.primaryPressed,
+    },
+    recoveryButtonText: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.onPrimary,
     },
     perfArea: {
       position: 'absolute',
