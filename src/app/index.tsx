@@ -17,6 +17,7 @@ import type { ThemeColors } from '@/constants/theme';
 import { APP_VERSION } from '@/constants/version';
 import { useTheme } from '@/context/ThemeContext';
 import { createDebugProject, type DebugLevel } from '@/utils/debugProject';
+import { recordError } from '@/utils/errorLog';
 import { createProject, deleteProject, getProjects, type ProjectMeta } from '@/utils/storage';
 
 /** Дата для списка: «29.10.2026 14:05». */
@@ -25,10 +26,6 @@ function formatDate(iso: string): string {
   if (Number.isNaN(d.getTime())) return '';
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function errorText(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 function openProject(id: string) {
@@ -50,7 +47,7 @@ export default function MenuScreen() {
     try {
       setProjects(await getProjects());
     } catch (e) {
-      Alert.alert('Не удалось прочитать список проектов', errorText(e));
+      recordError(e, 'Не удалось прочитать список проектов');
     }
   }, []);
 
@@ -67,7 +64,7 @@ export default function MenuScreen() {
     try {
       openProject(await createProject(name));
     } catch (e) {
-      Alert.alert('Не удалось создать проект', errorText(e));
+      recordError(e, 'Не удалось создать проект');
     } finally {
       setBusy(false);
     }
@@ -78,7 +75,7 @@ export default function MenuScreen() {
     try {
       openProject(await createDebugProject(level));
     } catch (e) {
-      Alert.alert('Не удалось создать тестовый проект', errorText(e));
+      recordError(e, 'Не удалось создать тестовый проект');
     } finally {
       setBusy(false);
     }
@@ -110,7 +107,7 @@ export default function MenuScreen() {
           try {
             await deleteProject(project.id);
           } catch (e) {
-            Alert.alert('Не удалось удалить проект', errorText(e));
+            recordError(e, 'Не удалось удалить проект');
           }
           refresh();
         },

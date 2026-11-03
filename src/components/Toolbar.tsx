@@ -37,13 +37,14 @@ type Category = {
   items: MenuItem[];
 };
 
+// Только плоские контурные MaterialCommunityIcons: без изометрии, 3D-кубов и растровых картинок.
 const CATEGORIES: Record<CategoryId, Category> = {
   construction: {
     id: 'construction',
     label: 'Построение',
     icon: 'pencil-ruler',
     items: [
-      { kind: 'tool', id: 'point', tool: 'point', label: 'Точка', icon: 'circle-small' },
+      { kind: 'tool', id: 'point', tool: 'point', label: 'Точка', icon: 'circle-outline' },
       { kind: 'tool', id: 'segment', tool: 'segment', label: 'Отрезок', icon: 'minus' },
       { kind: 'tool', id: 'circle', tool: 'circle', label: 'Окружность', icon: 'circle-outline' },
       { kind: 'tool', id: 'xline', tool: 'xline', label: 'Прямая', icon: 'vector-line' },
@@ -70,7 +71,7 @@ const CATEGORIES: Record<CategoryId, Category> = {
         tool: 'dimension',
         axis: 'x',
         label: 'Размер X',
-        icon: 'axis-x-arrow',
+        icon: 'arrow-left-right',
       },
       {
         kind: 'tool',
@@ -78,7 +79,7 @@ const CATEGORIES: Record<CategoryId, Category> = {
         tool: 'dimension',
         axis: 'y',
         label: 'Размер Y',
-        icon: 'axis-y-arrow',
+        icon: 'arrow-up-down',
       },
       {
         kind: 'tool',

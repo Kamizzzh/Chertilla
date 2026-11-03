@@ -3,6 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
 import { APP_VERSION } from '@/constants/version';
+import { recordError } from '@/utils/errorLog';
 
 const CRASH_FILE_NAME = 'last_crash.log';
 const TELEGRAM_MIN_INTERVAL_MS = 5_000;
@@ -151,18 +152,7 @@ export function sendToTelegram(text: string, parseMode?: TelegramParseMode): Pro
   return result;
 }
 
-async function persistAndSendCrash(report: string): Promise<void> {
-  try {
-    await FileSystem.writeAsStringAsync(crashFileUri(), report);
-  } catch {
-    // Даже если диск недоступен, всё равно пробуем отправить отчёт по сети.
-  }
-
-  const sent = await sendToTelegram(report);
-  if (sent) await deleteLastCrash();
-}
-
-/** Перехватывает фатальные JS-ошибки и сохраняет стандартное поведение React Native. */
+/** Перехватывает JS-ошибки, тихо пишет их в журнал и сохраняет стандартное поведение React Native. */
 export function initErrorLogger(): void {
   if (isLoggerInitialized) return;
   isLoggerInitialized = true;
@@ -171,9 +161,8 @@ export function initErrorLogger(): void {
 
   ErrorUtils.setGlobalHandler((error, isFatal) => {
     try {
-      if (isFatal) {
-        void persistAndSendCrash(formatCrashReport(error));
-      }
+      recordError(error, isFatal ? 'Фатальная ошибка JavaScript' : 'Ошибка JavaScript');
+      if (isFatal) void sendToTelegram(formatCrashReport(error));
     } finally {
       previousHandler(error, isFatal);
     }

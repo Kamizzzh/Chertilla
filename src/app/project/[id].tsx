@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, BackHandler, Keyboard, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, BackHandler, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -12,18 +12,20 @@ import {
 } from '@/components/CoordinateModal';
 import { DrawingCanvas, type DrawingCanvasHandle, type EditMode } from '@/components/DrawingCanvas';
 import { DivideModal } from '@/components/DivideModal';
+import { ErrorLogModal } from '@/components/ErrorLogModal';
 import { FeedbackModal } from '@/components/FeedbackModal';
-import { FLOATING_BUTTON_SIZE, FloatingButton } from '@/components/FloatingButton';
 import { PerfMonitor, PerfToggle } from '@/components/PerfMonitor';
 import { SelectionVignette } from '@/components/SelectionVignette';
+import { SettingsModal } from '@/components/SettingsModal';
 import { Toolbar } from '@/components/Toolbar';
-import { FLOATING_MARGIN, TOP_GAP, TopBar } from '@/components/TopBar';
+import { FLOATING_MARGIN, TopBar } from '@/components/TopBar';
 import { XLineMenu } from '@/components/XLineMenu';
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import { useShapeHistory } from '@/hooks/useShapeHistory';
 import type { DimensionAxis, Shape, Tool, XLineMode } from '@/types/shapes';
 import { recordAction } from '@/utils/actionHistory';
+import { recordError } from '@/utils/errorLog';
 import { sendFeedback } from '@/utils/feedback';
 import { divideShape, getArcFrom3Points, roundAngle } from '@/utils/geometry';
 import { computeIntersection } from '@/utils/intersection';
@@ -201,8 +203,6 @@ export default function ProjectScreen() {
   const [marqueePending, setMarqueePending] = useState(false);
 
   const [projectName, setProjectName] = useState('');
-  // Показывается после автоматической замены повреждённого файла пустым проектом.
-  const [recoveryNoticeVisible, setRecoveryNoticeVisible] = useState(false);
   // Фигуры на момент последнего сохранения или загрузки. null — проект ещё загружается.
   // Сравнение по ссылке: «Отменить» до сохранённого состояния возвращает тот же массив,
   // поэтому чертёж снова считается сохранённым.
@@ -229,6 +229,8 @@ export default function ProjectScreen() {
   // Открыто ли окно «Изменить» (параметры единственной выделенной фигуры).
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
+  const [errorLogVisible, setErrorLogVisible] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(false);
   // Фигура, которую можно изменить: выделена ровно одна.
   const editTarget = selectedCount === 1 ? selectedShapes[0] : null;
   const editFields = editTarget ? getEditFields(editTarget) : null;
@@ -236,8 +238,6 @@ export default function ProjectScreen() {
   // Сбрасывается вместе с выделением. Если выделенная фигура пропала, режим не действует.
   const [editMode, setEditMode] = useState<EditMode>('none');
   const dragMode = editMode === 'drag' && editTarget !== null;
-  // Свёрнута ли верхняя панель (тогда холст занимает всю высоту экрана).
-  const [topBarCollapsed, setTopBarCollapsed] = useState(false);
   // Монитор производительности (FPS, память). Выключен по умолчанию,
   // кнопка «PERF» есть в любом проекте.
   const [perfVisible, setPerfVisible] = useState(false);
@@ -514,7 +514,7 @@ export default function ProjectScreen() {
     redo();
   };
 
-  /** Сохраняет чертёж. Возвращает true, если получилось (при ошибке сам показывает сообщение). */
+  /** Сохраняет чертёж. Ошибка попадает в журнал и не закрывает рабочий экран. */
   const save = useCallback(async (): Promise<boolean> => {
     try {
       await saveProject(id, shapes);
@@ -523,7 +523,7 @@ export default function ProjectScreen() {
       return true;
     } catch (e) {
       recordAction('Ошибка сохранения проекта');
-      Alert.alert('Не удалось сохранить', e instanceof Error ? e.message : String(e));
+      recordError(e, 'Не удалось сохранить проект');
       return false;
     }
   }, [id, shapes]);
@@ -556,7 +556,7 @@ export default function ProjectScreen() {
     try {
       await shareDrawing(shapes, projectName, format);
     } catch (e) {
-      Alert.alert('Не удалось экспортировать', e instanceof Error ? e.message : String(e));
+      recordError(e, `Не удалось экспортировать чертёж в ${format.toUpperCase()}`);
     }
   };
 
@@ -574,7 +574,12 @@ export default function ProjectScreen() {
       setEditMode('none');
       setShapes(list); // заодно очищает историю: «Отменить» не откатит загрузку
       setSavedShapes(list);
-      setRecoveryNoticeVisible(result.recovered);
+      if (result.recovered) {
+        recordError(
+          new Error('Повреждённый файл чертежа заменён пустым проектом'),
+          'Восстановление проекта',
+        );
+      }
       recordAction(
         result.recovered
           ? 'Повреждённый файл заменён пустым проектом'
@@ -589,20 +594,23 @@ export default function ProjectScreen() {
     try {
       applyLoaded(await loadProject(id));
     } catch (e) {
-      Alert.alert('Не удалось загрузить', e instanceof Error ? e.message : String(e));
+      recordError(e, 'Не удалось загрузить сохранённый проект');
     }
   };
 
-  // Открыли экран — загружаем название и фигуры проекта. Повреждённый JSON
-  // storage.ts заменяет пустым проектом; при другой ошибке возвращаемся в меню.
+  // Открыли экран — загружаем название и фигуры проекта. Ошибки не показываются
+  // отдельными окнами: их можно посмотреть позже в «Журнале ошибок».
   useEffect(() => {
     getProject(id)
       .then((meta) => setProjectName(meta?.name ?? 'Без названия'))
-      .catch(() => setProjectName('Без названия'));
+      .catch((e: unknown) => {
+        recordError(e, 'Не удалось прочитать название проекта');
+        setProjectName('Без названия');
+      });
     loadProject(id)
       .then(applyLoaded)
       .catch((e: unknown) => {
-        Alert.alert('Не удалось открыть проект', e instanceof Error ? e.message : String(e));
+        recordError(e, 'Не удалось открыть проект');
         goToMenu();
       });
   }, [id, applyLoaded]);
@@ -849,20 +857,20 @@ export default function ProjectScreen() {
 
   return (
     <View style={styles.container}>
-      {!topBarCollapsed && (
-        <TopBar
-          projectName={isDirty ? `${projectName} •` : projectName}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          onSave={handleSave}
-          onFeedback={() => setFeedbackModalVisible(true)}
-          onLoad={handleLoad}
-          onExport={handleExport}
-          onCollapse={() => setTopBarCollapsed(true)}
-        />
-      )}
+      <TopBar
+        projectName={isDirty ? `${projectName} •` : projectName}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onBack={handleBack}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        onSave={handleSave}
+        onFeedback={() => setFeedbackModalVisible(true)}
+        onLoad={handleLoad}
+        onExport={handleExport}
+        onErrorLog={() => setErrorLogVisible(true)}
+        onSettings={() => setSettingsVisible(true)}
+      />
 
       <View style={styles.canvasArea}>
         <DrawingCanvas
@@ -1066,14 +1074,13 @@ export default function ProjectScreen() {
           )}
         </View>
 
-        {/* Правый верхний угол холста: кнопка «PERF» и под ней монитор производительности.
-            Когда верхняя панель свёрнута, там же висит кнопка «≡» — опускаемся ниже неё. */}
+        {/* Правый верхний угол холста: кнопка «PERF» и под ней монитор производительности. */}
         <View
           pointerEvents="box-none"
           style={[
             styles.perfArea,
             {
-              top: topBarCollapsed ? insets.top + TOP_GAP + FLOATING_BUTTON_SIZE + 8 : 8,
+              top: 8,
               right: insets.right + FLOATING_MARGIN,
             },
           ]}>
@@ -1104,45 +1111,6 @@ export default function ProjectScreen() {
         onDelete={handleDeleteSelected}
       />
 
-      {/* Плавающие кнопки рисуются последними, чтобы быть поверх панели и холста.
-          Отступы считаются от безопасной зоны — кнопки не уходят под вырез камеры. */}
-      <FloatingButton
-        icon="←"
-        accessibilityLabel="Назад в меню"
-        onPress={handleBack}
-        style={{ top: insets.top + TOP_GAP, left: insets.left + FLOATING_MARGIN }}
-      />
-      {topBarCollapsed && (
-        <FloatingButton
-          icon="≡"
-          accessibilityLabel="Показать верхнюю панель"
-          onPress={() => setTopBarCollapsed(false)}
-          style={{ top: insets.top + TOP_GAP, right: insets.right + FLOATING_MARGIN }}
-        />
-      )}
-
-      <Modal
-        visible={recoveryNoticeVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setRecoveryNoticeVisible(false)}>
-        <View style={styles.recoveryBackdrop}>
-          <View style={styles.recoveryCard}>
-            <Text style={styles.recoveryTitle}>Восстановление проекта</Text>
-            <Text style={styles.recoveryText}>Файл чертежа поврежден. Создан пустой проект</Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setRecoveryNoticeVisible(false)}
-              style={({ pressed }) => [
-                styles.recoveryButton,
-                pressed && styles.recoveryButtonPressed,
-              ]}>
-              <Text style={styles.recoveryButtonText}>Понятно</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-
       <DivideModal
         visible={divideModalVisible && divideTarget !== null}
         shapeName={divideTarget ? SHAPE_NAMES[divideTarget.type] : 'фигура'}
@@ -1155,6 +1123,9 @@ export default function ProjectScreen() {
         onClose={() => setFeedbackModalVisible(false)}
         onSubmit={handleFeedbackSubmit}
       />
+
+      <ErrorLogModal visible={errorLogVisible} onClose={() => setErrorLogVisible(false)} />
+      <SettingsModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} />
 
       <CoordinateModal
         visible={coordModalVisible}
@@ -1291,48 +1262,6 @@ const createStyles = (colors: ThemeColors) =>
     },
     actionButtonTextDanger: {
       color: colors.dangerText,
-    },
-    recoveryBackdrop: {
-      flex: 1,
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: 24,
-      backgroundColor: colors.overlay,
-    },
-    recoveryCard: {
-      width: '100%',
-      maxWidth: 380,
-      padding: 20,
-      gap: 16,
-      borderRadius: 12,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.borderSubtle,
-    },
-    recoveryTitle: {
-      fontSize: 18,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    recoveryText: {
-      fontSize: 15,
-      lineHeight: 22,
-      color: colors.textSecondary,
-    },
-    recoveryButton: {
-      minHeight: 44,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderRadius: 8,
-      backgroundColor: colors.primary,
-    },
-    recoveryButtonPressed: {
-      backgroundColor: colors.primaryPressed,
-    },
-    recoveryButtonText: {
-      fontSize: 15,
-      fontWeight: '600',
-      color: colors.onPrimary,
     },
     perfArea: {
       position: 'absolute',
