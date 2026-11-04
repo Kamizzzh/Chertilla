@@ -17,7 +17,7 @@ import { DivideModal } from '@/components/DivideModal';
 import { ErrorLogModal } from '@/components/ErrorLogModal';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import LineStylePicker from '@/components/LineStylePicker';
-import { PerfToggle } from '@/components/PerfMonitor';
+import { PerfToggle, RealTimeFpsOverlay } from '@/components/PerfMonitor';
 import { SelectionVignette } from '@/components/SelectionVignette';
 import { SettingsModal } from '@/components/SettingsModal';
 import { DEFAULT_METHOD_IDS, isConstructionTool, type ConstructionTool } from '@/components/SubMenu';
@@ -336,6 +336,8 @@ export default function ProjectScreen() {
   const dragMode = editMode === 'drag' && editTarget !== null;
   // Скрытый DEV-стресс-тест: исходный чертёж восстанавливается после проверки.
   const [devPerfVisible, setDevPerfVisible] = useState(false);
+  // Долгое нажатие DEV включает реальный UI FPS поверх обычного чертежа.
+  const [fpsOverlayVisible, setFpsOverlayVisible] = useState(false);
   // Привязка к сетке (шаг 10 мм) для тапа, лупы и рукояток. По умолчанию выключена.
   const [snapToGrid, setSnapToGrid] = useState(false);
   // Орто-режим: вторая точка отрезка или прямой даёт строго горизонтальную/вертикальную линию.
@@ -1566,6 +1568,10 @@ export default function ProjectScreen() {
           onUpdateShape={handleCanvasUpdateShape}
         />
 
+        {fpsOverlayVisible && (
+          <RealTimeFpsOverlay style={{ top: 8, left: insets.left + FLOATING_MARGIN }} />
+        )}
+
         {(drawingTool || (tool === 'select' && selectedCount > 0)) && (
           <LineStylePicker
             visible
@@ -1821,12 +1827,13 @@ export default function ProjectScreen() {
             },
           ]}>
           <PerfToggle
-            active={devPerfVisible}
+            active={devPerfVisible || fpsOverlayVisible}
             onPress={() => {
               clearPending();
               selectShapes([]);
               setDevPerfVisible(true);
             }}
+            onLongPress={() => setFpsOverlayVisible((current) => !current)}
           />
         </View>
 

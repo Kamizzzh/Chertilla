@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/immutability -- SharedValue Reanimated штатно изменяются через .value. */
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { getBatteryLevelAsync } from 'expo-battery';
+import * as Clipboard from 'expo-clipboard';
 import * as Device from 'expo-device';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import {
@@ -126,8 +127,10 @@ export function DevPerfModal({
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [results, setResults] = useState<StageResult[]>([]);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const logScrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
   const batteryRequestRef = useRef(0);
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const mountedRef = useRef(true);
   const visibleRef = useRef(visible);
@@ -423,6 +426,11 @@ export function DevPerfModal({
     setLogs([]);
     setResults([]);
     setBatteryPercent(null);
+    setCopyStatus('idle');
+    if (copyResetTimerRef.current !== null) {
+      clearTimeout(copyResetTimerRef.current);
+      copyResetTimerRef.current = null;
+    }
 
     const requestId = batteryRequestRef.current + 1;
     batteryRequestRef.current = requestId;
@@ -469,6 +477,7 @@ export function DevPerfModal({
     return () => {
       mountedRef.current = false;
       visibleRef.current = false;
+      if (copyResetTimerRef.current !== null) clearTimeout(copyResetTimerRef.current);
       const session = sessionRef.current;
       if (session) restoreSession(session, null);
     };
@@ -478,6 +487,61 @@ export function DevPerfModal({
   const manufacturer = Device.manufacturer ?? 'н/д';
   const osName = Device.osName ?? Platform.OS;
   const osVersion = Device.osVersion ?? String(Platform.Version);
+  const batteryText = batteryPercent === null ? 'н/д' : `${batteryPercent}%`;
+
+  // Копируем один читаемый отчёт: устройство, все результаты FPS и каждая строка журнала.
+  const fullLogText = useMemo(() => {
+    const resultLines = results.length === 0
+      ? ['Результатов пока нет.']
+      : results.map(
+          (result) =>
+            `${result.label} (${result.count} фигур): FPS ср ${formatFps(result.average)}, мин ${formatFps(result.min)}, макс ${formatFps(result.max)}, samples: ${result.samples}`,
+        );
+    const journalLines = logs.length === 0
+      ? ['Журнал появится после запуска теста.']
+      : logs;
+    return [
+      'Чертилла — DEV-стресс-тест',
+      '',
+      'Устройство',
+      `Модель: ${model}`,
+      `Производитель: ${manufacturer}`,
+      `ОС: ${osName} ${osVersion}`,
+      `Заряд: ${batteryText}`,
+      '',
+      'Результаты этапов',
+      ...resultLines,
+      '',
+      'Подробный журнал',
+      ...journalLines,
+    ].join('\n');
+  }, [batteryText, logs, manufacturer, model, osName, osVersion, results]);
+
+  const handleCopyLog = useCallback(async () => {
+    if (copyStatus === 'copying') return;
+    if (copyResetTimerRef.current !== null) clearTimeout(copyResetTimerRef.current);
+    setCopyStatus('copying');
+    try {
+      const copied = await Clipboard.setStringAsync(fullLogText);
+      if (!copied) throw new Error('Clipboard rejected the text');
+      if (mountedRef.current) setCopyStatus('copied');
+    } catch {
+      if (mountedRef.current) setCopyStatus('error');
+    }
+    if (mountedRef.current) {
+      copyResetTimerRef.current = setTimeout(() => {
+        copyResetTimerRef.current = null;
+        if (mountedRef.current) setCopyStatus('idle');
+      }, 2000);
+    }
+  }, [copyStatus, fullLogText]);
+
+  const copyButtonText = {
+    idle: 'Скопировать лог',
+    copying: 'Копирование…',
+    copied: 'Скопировано!',
+    error: 'Ошибка копирования',
+  }[copyStatus];
 
   return (
     <Modal
@@ -508,9 +572,7 @@ export function DevPerfModal({
             <Text style={styles.deviceText}>Модель: {model}</Text>
             <Text style={styles.deviceText}>Производитель: {manufacturer}</Text>
             <Text style={styles.deviceText}>ОС: {osName} {osVersion}</Text>
-            <Text style={styles.deviceText}>
-              Заряд: {batteryPercent === null ? 'н/д' : `${batteryPercent}%`}
-            </Text>
+            <Text style={styles.deviceText}>Заряд: {batteryText}</Text>
           </View>
 
           <Pressable
@@ -556,7 +618,25 @@ export function DevPerfModal({
             </View>
           )}
 
-          <Text style={styles.sectionTitle}>Подробный журнал</Text>
+          <View style={styles.logHeader}>
+            <Text style={[styles.sectionTitle, styles.logTitle]}>Подробный журнал</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={copyButtonText}
+              disabled={copyStatus === 'copying'}
+              onPress={() => void handleCopyLog()}
+              style={({ pressed }) => [styles.copyButton, pressed && styles.copyButtonPressed]}>
+              <MaterialCommunityIcons
+                name={copyStatus === 'copied' ? 'check' : copyStatus === 'error' ? 'alert-circle-outline' : 'content-copy'}
+                size={16}
+                color={copyStatus === 'error' ? colors.dangerText : colors.accentText}
+              />
+              <Text
+                style={[styles.copyButtonText, copyStatus === 'error' && styles.copyButtonTextError]}>
+                {copyButtonText}
+              </Text>
+            </Pressable>
+          </View>
           <ScrollView
             ref={logScrollRef}
             style={styles.logScroll}
@@ -727,6 +807,40 @@ const createStyles = (colors: ThemeColors) =>
       fontSize: 13,
       fontWeight: '700',
       color: colors.textSecondary,
+    },
+    logHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+      marginBottom: 6,
+    },
+    logTitle: {
+      marginBottom: 0,
+    },
+    copyButton: {
+      minHeight: 34,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 7,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surfaceSecondary,
+    },
+    copyButtonPressed: {
+      backgroundColor: colors.surfacePressed,
+    },
+    copyButtonText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.accentText,
+    },
+    copyButtonTextError: {
+      color: colors.dangerText,
     },
     logScroll: {
       flex: 1,

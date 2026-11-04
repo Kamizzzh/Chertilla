@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -8,11 +8,12 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { useFrameCallback, useSharedValue } from 'react-native-reanimated';
+import Animated, { useFrameCallback, useSharedValue } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
 /** Как часто обновлять цифры на экране, мс. Чаще не нужно — сам счётчик начнёт нагружать JS-поток. */
 const REPORT_INTERVAL_MS = 1000;
+const LIVE_FPS_REPORT_INTERVAL_MS = 500;
 
 /** Память JS-движка, МБ. total — сколько движок занял у системы (если известно). */
 type HeapInfo = { usedMb: number; totalMb: number | null };
@@ -148,10 +149,44 @@ export function PerfMonitor({ style }: MonitorProps) {
   );
 }
 
+/** Небольшой оверлей реального UI FPS: кадры копятся на UI-потоке, React обновляется лишь 2 раза/с. */
+export function RealTimeFpsOverlay({ style }: MonitorProps) {
+  const [fps, setFps] = useState<number | null>(null);
+  const frames = useSharedValue(0);
+  const windowStart = useSharedValue(-1);
+
+  useFrameCallback((frame) => {
+    'worklet';
+    const now = frame.timestamp;
+    if (windowStart.value < 0) {
+      windowStart.value = now;
+      frames.value = 0;
+      return;
+    }
+    frames.value += 1;
+    const elapsed = now - windowStart.value;
+    if (elapsed >= LIVE_FPS_REPORT_INTERVAL_MS) {
+      scheduleOnRN(setFps, Math.round((frames.value * 1000) / elapsed));
+      frames.value = 0;
+      windowStart.value = now;
+    }
+  });
+
+  return (
+    <View pointerEvents="none" style={[styles.livePanel, style]}>
+      <Animated.Text style={styles.liveText}>
+        {fps === null ? '…' : fps} FPS
+      </Animated.Text>
+    </View>
+  );
+}
+
 type ToggleProps = {
   /** Показана ли панель сейчас. */
   active: boolean;
   onPress: () => void;
+  /** Долгое нажатие переключает оверлей реального FPS. */
+  onLongPress?: () => void;
   /** Положение кнопки (top/right). */
   style?: StyleProp<ViewStyle>;
 };
@@ -159,13 +194,30 @@ type ToggleProps = {
 /** Размер круглой кнопки «DEV», пт. Меньше обычных плавающих кнопок, чтобы не мешать чертить. */
 export const DEV_TOGGLE_SIZE = 34;
 
-/** Маленькая полупрозрачная кнопка открытия DEV-стресс-теста. */
-export function PerfToggle({ active, onPress, style }: ToggleProps) {
+/** Короткий тап открывает DEV-тест, долгий — только переключает FPS без открытия окна. */
+export function PerfToggle({ active, onPress, onLongPress, style }: ToggleProps) {
+  const longPressRef = useRef(false);
+
   return (
     <Pressable
-      onPress={onPress}
+      onPressIn={() => {
+        longPressRef.current = false;
+      }}
+      onPress={() => {
+        if (longPressRef.current) {
+          longPressRef.current = false;
+          return;
+        }
+        onPress();
+      }}
+      onLongPress={() => {
+        if (!onLongPress) return;
+        longPressRef.current = true;
+        onLongPress();
+      }}
       accessibilityRole="button"
-      accessibilityLabel="Открыть DEV-стресс-тест производительности"
+      accessibilityLabel="DEV: тест производительности и оверлей FPS"
+      accessibilityHint="Короткое нажатие открывает тест, долгое переключает реальный FPS"
       hitSlop={6}
       style={({ pressed }) => [
         styles.toggle,
@@ -195,6 +247,22 @@ const styles = StyleSheet.create({
   },
   value: {
     fontWeight: '700',
+  },
+  livePanel: {
+    position: 'absolute',
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 7,
+    backgroundColor: 'rgba(38, 50, 56, 0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(120, 144, 156, 0.7)',
+  },
+  liveText: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: MONO_FONT,
+    color: '#69F0AE',
+    fontVariant: ['tabular-nums'],
   },
   toggle: {
     width: DEV_TOGGLE_SIZE,
