@@ -112,32 +112,42 @@ export function TooltipPressable({
   );
 }
 
-const LINE_PATH = Skia.PathBuilder.Make();
-LINE_PATH.moveTo(18, 34);
-LINE_PATH.lineTo(102, 34);
-
-const CIRCLE_PATH = Skia.PathBuilder.Make();
-CIRCLE_PATH.addCircle(60, 34, 24);
-
-const RECT_PATH = Skia.PathBuilder.Make();
-RECT_PATH.addRect(Skia.XYWHRect(32, 10, 56, 48));
-
-const ARC_PATH = Skia.PathBuilder.Make();
-ARC_PATH.addArc(Skia.XYWHRect(30, 8, 60, 60), 195, 260);
-
-const SELECT_PATH = Skia.PathBuilder.Make();
-SELECT_PATH.addRect(Skia.XYWHRect(26, 12, 68, 44));
-
-const CHECK_PATH = Skia.PathBuilder.Make();
-CHECK_PATH.moveTo(34, 34);
-CHECK_PATH.lineTo(52, 50);
-CHECK_PATH.lineTo(88, 18);
-
 function TooltipPreview({ kind }: { kind: TooltipPreviewKind }) {
   const { colors } = useTheme();
   const progress = useSharedValue(0);
   const pulseRadius = useDerivedValue(() => 3 + progress.value * 4);
   const toggleX = useDerivedValue(() => 36 + progress.value * 48);
+  const paths = useMemo(() => {
+    const line = Skia.PathBuilder.Make();
+    line.moveTo(18, 34);
+    line.lineTo(102, 34);
+
+    const circle = Skia.PathBuilder.Make();
+    circle.addCircle(60, 34, 24);
+
+    const rect = Skia.PathBuilder.Make();
+    rect.addRect(Skia.XYWHRect(32, 10, 56, 48));
+
+    const arc = Skia.PathBuilder.Make();
+    arc.addArc(Skia.XYWHRect(30, 8, 60, 60), 195, 260);
+
+    const select = Skia.PathBuilder.Make();
+    select.addRect(Skia.XYWHRect(26, 12, 68, 44));
+
+    const check = Skia.PathBuilder.Make();
+    check.moveTo(34, 34);
+    check.lineTo(52, 50);
+    check.lineTo(88, 18);
+
+    return {
+      line: line.build(),
+      circle: circle.build(),
+      rect: rect.build(),
+      arc: arc.build(),
+      select: select.build(),
+      check: check.build(),
+    };
+  }, []);
 
   useEffect(() => {
     progress.value = 0;
@@ -163,19 +173,17 @@ function TooltipPreview({ kind }: { kind: TooltipPreviewKind }) {
               <Line p1={vec(96, 14)} p2={vec(96, 54)} color={colors.textMuted} strokeWidth={1} />
             </>
           )}
-          <Path path={LINE_PATH.build()} {...stroke} start={0} end={progress} />
+          <Path path={paths.line} {...stroke} start={0} end={progress} />
           <Circle cx={18} cy={34} r={3} color={colors.accent} />
           <Circle cx={102} cy={34} r={3} color={colors.accent} />
         </>
       )}
 
-      {kind === 'circle' && <Path path={CIRCLE_PATH.build()} {...stroke} start={0} end={progress} />}
-      {kind === 'rect' && <Path path={RECT_PATH.build()} {...stroke} start={0} end={progress} />}
-      {kind === 'arc' && <Path path={ARC_PATH.build()} {...stroke} start={0} end={progress} />}
-      {kind === 'select' && (
-        <Path path={SELECT_PATH.build()} {...stroke} start={0} end={progress} />
-      )}
-      {kind === 'action' && <Path path={CHECK_PATH.build()} {...stroke} start={0} end={progress} />}
+      {kind === 'circle' && <Path path={paths.circle} {...stroke} start={0} end={progress} />}
+      {kind === 'rect' && <Path path={paths.rect} {...stroke} start={0} end={progress} />}
+      {kind === 'arc' && <Path path={paths.arc} {...stroke} start={0} end={progress} />}
+      {kind === 'select' && <Path path={paths.select} {...stroke} start={0} end={progress} />}
+      {kind === 'action' && <Path path={paths.check} {...stroke} start={0} end={progress} />}
 
       {kind === 'point' && (
         <>
