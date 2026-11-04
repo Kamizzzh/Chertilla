@@ -5,7 +5,6 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  DEFAULT_METHOD_IDS,
   isConstructionTool,
   SubMenu,
   type ConstructionTool,
@@ -215,13 +214,15 @@ const CATEGORY_BUTTON_HEIGHT = 56;
 const TOOLBAR_VERTICAL_PADDING = 8;
 const TOOLBAR_HEIGHT = CATEGORY_BUTTON_HEIGHT + TOOLBAR_VERTICAL_PADDING * 2;
 const SUBMENU_GAP = 8;
+const TOOL_SUBMENU_COMPACT_HEIGHT = 66;
+const TOOL_SUBMENU_HEIGHT = 82;
 
 type Props = {
   nativeGesture: SharedNativeGesture;
   activeTool: Tool;
   onSelectTool: (tool: Tool) => void;
-  dimensionAxis: DimensionAxis;
   onSelectDimensionAxis: (axis: DimensionAxis) => void;
+  constructionMethodIds: Record<ConstructionTool, string>;
   onSelectConstructionMethod: (tool: ConstructionTool, methodId: string) => void;
   snapToGrid: boolean;
   onToggleSnapToGrid: () => void;
@@ -320,6 +321,8 @@ function ToolSubmenu({
     onSelectTool(active ? 'none' : item.tool);
   };
 
+  const compactTools = category.id === 'construction' || category.id === 'analysis';
+
   return (
     <Animated.View
       pointerEvents="box-none"
@@ -366,18 +369,21 @@ function ToolSubmenu({
                 accessibilityState={{ disabled, selected: active }}
                 style={({ pressed }) => [
                   styles.toolButton,
+                  compactTools && styles.toolButtonCompact,
                   item.kind === 'ucs' && styles.ucsButton,
                   active && styles.toolButtonActive,
                   danger && !disabled && styles.deleteButton,
                   pressed && !active && !disabled && styles.buttonPressed,
                   disabled && styles.buttonDisabled,
                 ]}>
-                <MaterialCommunityIcons name={item.icon} size={24} color={iconColor} />
-                <Text
-                  style={[styles.toolButtonText, { color: iconColor }]}
-                  numberOfLines={item.kind === 'ucs' ? 2 : 1}>
-                  {item.label}
-                </Text>
+                <MaterialCommunityIcons name={item.icon} size={compactTools ? 20 : 24} color={iconColor} />
+                {!compactTools && (
+                  <Text
+                    style={[styles.toolButtonText, { color: iconColor }]}
+                    numberOfLines={item.kind === 'ucs' ? 2 : 1}>
+                    {item.label}
+                  </Text>
+                )}
                 {active && <View style={styles.toolActiveIndicator} />}
               </TooltipPressable>
             );
@@ -396,8 +402,8 @@ export function Toolbar({
   nativeGesture,
   activeTool,
   onSelectTool,
-  dimensionAxis,
   onSelectDimensionAxis,
+  constructionMethodIds,
   onSelectConstructionMethod,
   snapToGrid,
   onToggleSnapToGrid,
@@ -421,8 +427,6 @@ export function Toolbar({
   const [displayedCategory, setDisplayedCategory] = useState<CategoryId>('construction');
   const [activeMethodTool, setActiveMethodTool] = useState<ConstructionTool | null>(null);
   const [displayedMethodTool, setDisplayedMethodTool] = useState<ConstructionTool>('point');
-  const [selectedMethodIds, setSelectedMethodIds] =
-    useState<Record<ConstructionTool, string>>(DEFAULT_METHOD_IDS);
   const [tooltip, setTooltip] = useState<{
     content: TooltipContent;
     anchor: TooltipAnchor;
@@ -447,25 +451,30 @@ export function Toolbar({
 
   const openMethods = (tool: ConstructionTool) => {
     hideTooltip();
-    if (tool === 'dimension') {
-      const methodId = dimensionAxis === 'x' ? 'horizontal' : dimensionAxis === 'y' ? 'vertical' : 'aligned';
-      setSelectedMethodIds((current) => ({ ...current, dimension: methodId }));
-    }
     setDisplayedMethodTool(tool);
     setActiveMethodTool(tool);
-    setActiveCategory(null);
+    // Категория остаётся под способами: на экране видна вся иерархия.
   };
 
   const selectMethod = (option: SubMenuOption) => {
     const tool = displayedMethodTool;
-    setSelectedMethodIds((current) => ({ ...current, [tool]: option.id }));
     if (!option.implemented) return;
 
     if (tool === 'dimension' && option.axis) onSelectDimensionAxis(option.axis);
     onSelectConstructionMethod(tool, option.id);
     if (activeTool !== tool) onSelectTool(tool);
-    setActiveMethodTool(null);
+    // Сворачиваем только первый уровень. Способы остаются доступны для смены на ходу.
+    setActiveCategory(null);
   };
+
+  const compactTools = activeCategory === 'construction' || activeCategory === 'analysis';
+  const methodsBottom =
+    TOOLBAR_HEIGHT +
+    SUBMENU_GAP +
+    insets.bottom +
+    (activeCategory === null
+      ? 0
+      : (compactTools ? TOOL_SUBMENU_COMPACT_HEIGHT : TOOL_SUBMENU_HEIGHT) + SUBMENU_GAP);
 
   return (
     <View
@@ -486,7 +495,10 @@ export function Toolbar({
         activeUcsId={activeUcsId}
         ucsCreationActive={ucsCreationActive}
         onUcsAction={onUcsAction}
-        onClose={() => setActiveCategory(null)}
+        onClose={() => {
+          setActiveCategory(null);
+          setActiveMethodTool(null);
+        }}
         onOpenMethods={openMethods}
         onShowTooltip={showTooltip}
         onHideTooltip={hideTooltip}
@@ -496,10 +508,10 @@ export function Toolbar({
         nativeGesture={nativeGesture}
         tool={displayedMethodTool}
         visible={activeMethodTool !== null}
-        selectedMethodId={selectedMethodIds[displayedMethodTool]}
+        selectedMethodId={constructionMethodIds[displayedMethodTool]}
         left={insets.left + 12}
         right={insets.right + 12}
-        bottom={TOOLBAR_HEIGHT + SUBMENU_GAP + insets.bottom}
+        bottom={methodsBottom}
         onSelect={selectMethod}
         onClose={() => setActiveMethodTool(null)}
         onShowTooltip={showTooltip}
@@ -735,6 +747,12 @@ const createStyles = (colors: ThemeColors) =>
       backgroundColor: colors.background,
       borderWidth: 1,
       borderColor: colors.borderSubtle,
+    },
+    toolButtonCompact: {
+      width: 48,
+      height: 48,
+      paddingHorizontal: 4,
+      paddingVertical: 4,
     },
     ucsButton: {
       width: 88,

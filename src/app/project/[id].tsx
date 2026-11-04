@@ -44,7 +44,6 @@ import {
   getCircleTangentSegments,
   getCircleTangentTo3Lines,
   getInfiniteLine,
-  getLineIntersection,
   getRectFrom3Points,
   nearestPointOnLine,
   nearestPointOnSegment,
@@ -291,6 +290,7 @@ export default function ProjectScreen() {
   const [segmentAngleText, setSegmentAngleText] = useState('45');
   const [circleDiameterText, setCircleDiameterText] = useState('20');
   const constructionMethodId = isConstructionTool(tool) ? constructionMethodIds[tool] : null;
+  const pointIntersectionActive = tool === 'point' && constructionMethodId === 'intersection';
 
   // У каждого CAD-стиля свой запомненный цвет; null — автоматический чёрный/белый.
   const [lineStyle, setLineStyle] = useState<LineStyle>('solid_thin');
@@ -370,8 +370,11 @@ export default function ProjectScreen() {
   // Варианты точек и те из них, что рисуются маркерами на холсте.
   const intersectOptions = intersection?.options ?? [];
   const markerOptions = useMemo(
-    () => (intersection ? intersection.options.filter((o) => o.marker) : []),
-    [intersection],
+    () =>
+      intersection && (!pointIntersectionActive || intersection.exact)
+        ? intersection.options.filter((o) => o.marker)
+        : [],
+    [intersection, pointIntersectionActive],
   );
   const intersectMarkers = useMemo(() => markerOptions.map((o) => o.p), [markerOptions]);
 
@@ -382,7 +385,7 @@ export default function ProjectScreen() {
 
   // Выбранные фигуры подсвечиваются тем же синим, что и выделение.
   const canvasSelectedIds =
-    tool === 'intersect'
+    tool === 'intersect' || pointIntersectionActive
       ? intersectPair.map((s) => s.id)
       : tool === 'divide' && divideTarget
         ? [divideTarget.id]
@@ -423,6 +426,16 @@ export default function ProjectScreen() {
     }
     if (intersectIds.length === 1) {
       if (intersectIds[0] === shape.id) return; // та же фигура — вторую ещё ждём
+      const firstObject = shapes.find((s) => s.id === intersectIds[0]);
+      if (pointIntersectionActive && firstObject) {
+        const result = computeIntersection(firstObject, shape);
+        // Единственный результат однозначен, поэтому создаём его сразу. При нескольких
+        // пересечениях пара остаётся выбранной, а точку создаёт только тап по маркеру.
+        if (result?.exact && result.options.length === 1) {
+          createIntersectPoint(result.options[0].p);
+          return;
+        }
+      }
       setIntersectIds([intersectIds[0], shape.id]);
       return;
     }
@@ -724,6 +737,21 @@ export default function ProjectScreen() {
     clearPending();
   };
 
+  /** Полная отмена операции: ни старых точек, ни выбранных объектов, ни открытой лупы. */
+  const cancelConstruction = () => {
+    clearPending();
+    setCoordModalVisible(false);
+    canvasRef.current?.cancelPendingInput();
+    if (isConstructionTool(tool)) {
+      setConstructionMethodIds((current) => ({
+        ...current,
+        [tool]: DEFAULT_METHOD_IDS[tool],
+      }));
+      if (tool === 'dimension') setDimensionAxis('aligned');
+    }
+    recordAction('Построение отменено');
+  };
+
   const handleToggleSnapToGrid = () => {
     const next = !snapToGrid;
     setSnapToGrid(next);
@@ -916,26 +944,9 @@ export default function ProjectScreen() {
 
     if (tool === 'point') {
       if (method === 'intersection') {
-        if (!hit || !getInfiniteLine(hit)) {
-          reject('Коснитесь отрезка или разметочной прямой.');
-          return true;
-        }
-        if (constructionObjectIds.length === 0) {
-          rememberObject(hit);
-          return true;
-        }
-        if (!firstObject || firstObject.id === hit.id) {
-          reject('Выберите вторую, другую линию.');
-          return true;
-        }
-        const a = getInfiniteLine(firstObject);
-        const b = getInfiniteLine(hit);
-        const cross = a && b ? getLineIntersection(a, b) : null;
-        if (!cross) {
-          reject('Линии параллельны или совпадают: одной точки пересечения нет.');
-          return true;
-        }
-        finish({ id: makeId(), ...appearance, type: 'point', p: cross });
+        // Обычные тапы обрабатывает handleIntersectTap вместе с маркерами. Сюда можно
+        // попасть только из окна координат, где выбрать две фигуры невозможно.
+        reject('Коснитесь на холсте двух фигур, затем выберите оранжевый маркер.');
         return true;
       }
       if (method === 'center') {
@@ -1469,7 +1480,14 @@ export default function ProjectScreen() {
 
   let constructionHint: string | null = null;
   if (tool === 'point' && constructionMethodId === 'intersection') {
-    constructionHint = constructionObjectIds.length === 0 ? 'Пересечение: первая линия' : 'Пересечение: вторая линия';
+    constructionHint =
+      intersectPair.length === 0
+        ? 'Пересечение: коснитесь первой фигуры'
+        : intersectPair.length === 1
+          ? 'Пересечение: коснитесь второй фигуры'
+          : !intersection?.exact
+            ? 'Фигуры не пересекаются. Выберите другую пару'
+            : 'Выберите точку пересечения';
   } else if (tool === 'point' && constructionMethodId === 'center') {
     constructionHint = 'Центр: коснитесь окружности или дуги';
   } else if (tool === 'point' && constructionMethodId === 'onObject') {
@@ -1617,7 +1635,7 @@ export default function ProjectScreen() {
               )}
               <View style={styles.actionButtons}>
                 <Pressable
-                  onPress={clearPending}
+                  onPress={cancelConstruction}
                   style={({ pressed }) => [styles.actionButton, pressed && styles.actionButtonPressed]}>
                   <Text style={styles.actionButtonText}>Отмена</Text>
                 </Pressable>
@@ -1824,8 +1842,8 @@ export default function ProjectScreen() {
         nativeGesture={submenuNativeGesture}
         activeTool={tool}
         onSelectTool={selectTool}
-        dimensionAxis={dimensionAxis}
         onSelectDimensionAxis={selectDimensionAxis}
+        constructionMethodIds={constructionMethodIds}
         onSelectConstructionMethod={selectConstructionMethod}
         snapToGrid={snapToGrid}
         onToggleSnapToGrid={handleToggleSnapToGrid}

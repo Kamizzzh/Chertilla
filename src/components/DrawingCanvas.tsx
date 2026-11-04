@@ -201,6 +201,8 @@ export type DrawingCanvasHandle = {
   resetView: () => void;
   /** Убрать первый угол рамки (выделение в два тапа), если он поставлен. Виньетка гаснет. */
   cancelMarquee: () => void;
+  /** Сбросить временную точку касания и закрыть лупу при отмене построения. */
+  cancelPendingInput: () => void;
   /** Программные манипуляции для DEV-стресс-теста (время в мс). */
   devZoom: (scale: number, durationMs: number) => void;
   devPanMm: (dx: number, dy: number, durationMs: number) => void;
@@ -1170,9 +1172,11 @@ export function DrawingCanvas({
   onDivideTap,
 }: Props) {
   // Инструмент строит фигуры (точка, отрезок, окружность, прямая) — нужны лупа и привязка.
-  // «Пересечение» и «Разделить» только выбирают фигуры тапом — лупы нет.
+  // Оба способа пересечения и «Разделить» только выбирают фигуры тапом — лупы нет.
+  const intersectionTool =
+    tool === 'intersect' || (tool === 'point' && constructionMethodId === 'intersection');
   const drawingTool =
-    tool !== 'none' && tool !== 'select' && tool !== 'intersect' && tool !== 'divide';
+    tool !== 'none' && tool !== 'select' && !intersectionTool && tool !== 'divide';
   const selectTool = tool === 'select';
 
   // Выделенные фигуры. Тех, которых уже нет в чертеже (например, после «Отменить»),
@@ -1836,6 +1840,10 @@ export function DrawingCanvas({
     cancelMarquee: () => {
       if (marqueePoint1.get()) marqueePoint1.set(null);
     },
+    cancelPendingInput: () => {
+      touch.set(null);
+      setLoupeVisible(false);
+    },
     devZoom: (targetScale: number, durationMs: number) => {
       interaction.set(1);
       scale.set(withTiming(clampScale(targetScale), { duration: durationMs }));
@@ -1970,7 +1978,7 @@ export function DrawingCanvas({
         onSelectShapes(hit ? [hit.id] : []);
         return;
       }
-      if (tool === 'intersect') {
+      if (intersectionTool) {
         // Сначала маркеры (они лежат поверх фигур), затем фигура под пальцем.
         const tol = HIT_TOLERANCE_PX / safeK(vp);
         let markerIndex = -1;

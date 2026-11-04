@@ -56,13 +56,11 @@ type ActiveMeasurement = {
   sessionId: number;
 };
 
-const FPS_WINDOW_MS = 500;
 const ZOOM_DURATION_MS = 550;
 const PAN_DURATION_MS = 400;
 const ANIMATION_BUFFER_MS = 100;
 const STYLE_APPLY_DELAY_MS = 120;
 const BETWEEN_STAGES_DELAY_MS = 300;
-const MEASUREMENT_DRAIN_MS = 50;
 const PAN_DISTANCE_MM = 200;
 
 function timeStamp(): string {
@@ -76,7 +74,8 @@ function formatFps(value: number | null): string {
 }
 
 function summarizeSamples(stage: DevPerfStage, samples: number[]): StageResult {
-  if (samples.length === 0) {
+  const frameTimes = samples.filter((value) => Number.isFinite(value) && value > 0);
+  if (frameTimes.length === 0) {
     return {
       stageId: stage.id,
       label: stage.label,
@@ -88,22 +87,22 @@ function summarizeSamples(stage: DevPerfStage, samples: number[]): StageResult {
     };
   }
 
-  let sum = 0;
-  let min = samples[0] ?? 0;
-  let max = samples[0] ?? 0;
-  for (const sample of samples) {
-    sum += sample;
-    min = Math.min(min, sample);
-    max = Math.max(max, sample);
+  let totalMs = 0;
+  let minMs = frameTimes[0];
+  let maxMs = frameTimes[0];
+  for (const frameTime of frameTimes) {
+    totalMs += frameTime;
+    minMs = Math.min(minMs, frameTime);
+    maxMs = Math.max(maxMs, frameTime);
   }
   return {
     stageId: stage.id,
     label: stage.label,
     count: stage.count,
-    average: sum / samples.length,
-    min,
-    max,
-    samples: samples.length,
+    average: 1000 / (totalMs / frameTimes.length),
+    min: 1000 / maxMs,
+    max: 1000 / minMs,
+    samples: frameTimes.length,
   };
 }
 
@@ -146,10 +145,11 @@ export function DevPerfModal({
   const measurementCounterRef = useRef(0);
   const activeMeasurementRef = useRef<ActiveMeasurement | null>(null);
   const measurementSamplesRef = useRef<Map<number, number[]>>(new Map());
+  const measurementFlushWaitersRef = useRef<Map<number, () => void>>(new Map());
   const fpsActive = useSharedValue(false);
   const fpsMeasurementId = useSharedValue(0);
-  const fpsWindowStart = useSharedValue(-1);
-  const fpsFrames = useSharedValue(0);
+  const fpsFrameTimes = useSharedValue<number[]>([]);
+  const fpsFlushRequested = useSharedValue(false);
 
   const appendLog = useCallback((message: string) => {
     if (!mountedRef.current || !visibleRef.current) return;
@@ -184,10 +184,10 @@ export function DevPerfModal({
 
   const stopFps = useCallback(() => {
     fpsActive.value = false;
-    fpsWindowStart.value = -1;
-    fpsFrames.value = 0;
+    fpsFlushRequested.value = false;
+    fpsFrameTimes.value = [];
     activeMeasurementRef.current = null;
-  }, [fpsActive, fpsFrames, fpsWindowStart]);
+  }, [fpsActive, fpsFlushRequested, fpsFrameTimes]);
 
   const restoreSession = useCallback(
     (session: TestSession, logMessage: string | null) => {
@@ -218,7 +218,7 @@ export function DevPerfModal({
     restoreSession(session, 'Восстановление: исходные фигуры и вид восстановлены.');
   }, [appendLog, restoreSession]);
 
-  const receiveFpsWindow = useCallback((measurementId: number, fps: number) => {
+  const receiveFrameSamples = useCallback((measurementId: number, frameTimes: number[]) => {
     const active = activeMeasurementRef.current;
     const session = sessionRef.current;
     if (
@@ -226,40 +226,58 @@ export function DevPerfModal({
       active.id !== measurementId ||
       !session ||
       session.id !== active.sessionId ||
-      session.cancelled ||
-      !Number.isFinite(fps) ||
-      fps < 0
+      session.cancelled
     ) {
       return;
     }
-    measurementSamplesRef.current.get(measurementId)?.push(fps);
+    const target = measurementSamplesRef.current.get(measurementId);
+    if (target) {
+      for (const frameTime of frameTimes) target.push(frameTime);
+    }
+    measurementFlushWaitersRef.current.get(measurementId)?.();
   }, []);
 
-  // Кадры не покидают UI-поток: в JS уходит только одно число примерно раз в 500 мс.
+  // UI-поток копит длительности кадров локально. В JS массив уходит один раз после этапа,
+  // поэтому обмен между потоками не искажает сам замер производительности.
   useFrameCallback((frame) => {
     'worklet';
-    if (!fpsActive.value) {
-      fpsWindowStart.value = -1;
-      fpsFrames.value = 0;
+    if (fpsFlushRequested.value) {
+      fpsFlushRequested.value = false;
+      const frameTimes = fpsFrameTimes.value.slice();
+      fpsFrameTimes.value = [];
+      scheduleOnRN(receiveFrameSamples, fpsMeasurementId.value, frameTimes);
       return;
     }
+    if (!fpsActive.value) return;
 
-    const now = frame.timestamp;
-    if (fpsWindowStart.value < 0) {
-      fpsWindowStart.value = now;
-      fpsFrames.value = 0;
-      return;
+    const frameTime = frame.timeSincePreviousFrame;
+    if (frameTime !== null && Number.isFinite(frameTime) && frameTime > 0) {
+      fpsFrameTimes.value.push(frameTime);
     }
+  });
 
-    fpsFrames.value += 1;
-    const elapsed = now - fpsWindowStart.value;
-    if (elapsed >= FPS_WINDOW_MS) {
-      const fps = (fpsFrames.value * 1000) / elapsed;
-      scheduleOnRN(receiveFpsWindow, fpsMeasurementId.value, fps);
-      fpsWindowStart.value = now;
-      fpsFrames.value = 0;
-    }
-  }, visible);
+  /** Останавливает сбор и ждёт именно подтверждения доставки, а не произвольной паузы. */
+  const finishFpsMeasurement = useCallback(
+    (session: TestSession, measurementId: number): Promise<boolean> => {
+      if (!isSessionActive(session)) return Promise.resolve(false);
+      return new Promise<boolean>((resolve) => {
+        let settled = false;
+        const finish = (received: boolean) => {
+          if (settled) return;
+          settled = true;
+          session.waiters.delete(cancel);
+          measurementFlushWaitersRef.current.delete(measurementId);
+          resolve(received && isSessionActive(session));
+        };
+        const cancel = () => finish(false);
+        measurementFlushWaitersRef.current.set(measurementId, () => finish(true));
+        session.waiters.add(cancel);
+        fpsActive.value = false;
+        fpsFlushRequested.value = true;
+      });
+    },
+    [fpsActive, fpsFlushRequested, isSessionActive],
+  );
 
   const runTest = useCallback(
     async (session: TestSession) => {
@@ -285,8 +303,8 @@ export function DevPerfModal({
           measurementSamplesRef.current.set(measurementId, []);
           activeMeasurementRef.current = { id: measurementId, sessionId: session.id };
           fpsMeasurementId.value = measurementId;
-          fpsWindowStart.value = -1;
-          fpsFrames.value = 0;
+          fpsFlushRequested.value = false;
+          fpsFrameTimes.value = [];
           fpsActive.value = true;
 
           const runManipulations = async (series: number): Promise<boolean> => {
@@ -329,9 +347,10 @@ export function DevPerfModal({
           if (!(await waitForSession(session, STYLE_APPLY_DELAY_MS))) return;
           if (!(await runManipulations(2))) return;
 
-          // Сначала прекращаем новые окна, затем даже уже отправленному в RN окну даём дойти до JS.
-          fpsActive.value = false;
-          if (!(await waitForSession(session, MEASUREMENT_DRAIN_MS))) return;
+          // Следующий UI-кадр отправит массив через scheduleOnRN (runOnJS). Даже на тяжёлом
+          // этапе итог ждёт подтверждения доставки; «Отмена» разблокирует ожидание через session.waiters.
+          await finishFpsMeasurement(session, measurementId);
+          if (!isSessionActive(session)) return;
           if (activeMeasurementRef.current?.id === measurementId) {
             activeMeasurementRef.current = null;
           }
@@ -370,10 +389,11 @@ export function DevPerfModal({
     },
     [
       appendLog,
+      finishFpsMeasurement,
       fpsActive,
-      fpsFrames,
+      fpsFlushRequested,
+      fpsFrameTimes,
       fpsMeasurementId,
-      fpsWindowStart,
       isSessionActive,
       restoreSession,
       waitForSession,
@@ -472,7 +492,7 @@ export function DevPerfModal({
           <View style={styles.header}>
             <View style={styles.titleBlock}>
               <Text style={styles.title}>DEV-стресс-тест</Text>
-              <Text style={styles.subtitle}>UI FPS · окна примерно 500 мс</Text>
+              <Text style={styles.subtitle}>UI FPS · 1000 / среднее время кадра</Text>
             </View>
             <Pressable
               accessibilityRole="button"

@@ -2,7 +2,7 @@ import { useEffect, useMemo, type ComponentProps } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 
 import {
   TooltipPressable,
@@ -16,6 +16,8 @@ import type { DimensionAxis, Tool } from '@/types/shapes';
 import type { SharedNativeGesture } from '@/types/gestures';
 
 type IconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
+const SUBMENU_ANIMATION_MS = 180;
+
 export type ConstructionTool = Extract<
   Tool,
   'point' | 'segment' | 'circle' | 'arc' | 'rect' | 'dimension'
@@ -309,14 +311,28 @@ export function SubMenu({
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const progress = useSharedValue(0);
+  const bottomPosition = useSharedValue(bottom);
   const options = CONSTRUCTION_METHODS[tool];
   const selected = options.find((option) => option.id === selectedMethodId);
 
   useEffect(() => {
-    progress.value = withTiming(visible ? 1 : 0, { duration: 180 });
+    progress.value = withTiming(visible ? 1 : 0, { duration: SUBMENU_ANIMATION_MS });
   }, [progress, visible]);
 
+  useEffect(() => {
+    // При сворачивании верхнего ряда сначала ждём его исчезновения, затем плавно
+    // опускаем способы на освободившееся место — панели не перекрывают друг друга.
+    bottomPosition.value =
+      bottom < bottomPosition.value
+        ? withDelay(
+            SUBMENU_ANIMATION_MS,
+            withTiming(bottom, { duration: SUBMENU_ANIMATION_MS }),
+          )
+        : withTiming(bottom, { duration: SUBMENU_ANIMATION_MS });
+  }, [bottom, bottomPosition]);
+
   const animatedStyle = useAnimatedStyle(() => ({
+    bottom: bottomPosition.value,
     opacity: progress.value,
     transform: [{ translateY: 20 * (1 - progress.value) }],
   }));
@@ -328,7 +344,7 @@ export function SubMenu({
       importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       style={[
         styles.container,
-        { bottom, paddingLeft: left, paddingRight: right },
+        { paddingLeft: left, paddingRight: right },
         animatedStyle,
       ]}>
       <View pointerEvents={visible ? 'auto' : 'none'} style={styles.panel}>
