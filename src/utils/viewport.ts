@@ -59,13 +59,22 @@ export function worldToScreen(vp: Viewport, p: Point): Point {
   };
 }
 
-/** Пиксели экрана -> миллиметры. */
+/** Пиксели экрана -> миллиметры. Некорректный вид не должен возвращать NaN в жесты. */
 export function screenToWorld(vp: Viewport, p: Point): Point {
   'worklet';
-  const k = pxPerMm(vp);
+  const scale = Number.isFinite(vp.scale) && vp.scale > 0 ? vp.scale : 1;
+  const k = PX_PER_MM * scale;
+  const width = Number.isFinite(vp.width) ? vp.width : 0;
+  const height = Number.isFinite(vp.height) ? vp.height : 0;
+  const translateX = Number.isFinite(vp.translateX) ? vp.translateX : 0;
+  const translateY = Number.isFinite(vp.translateY) ? vp.translateY : 0;
+  const screenX = Number.isFinite(p.x) ? p.x : width / 2 + translateX;
+  const screenY = Number.isFinite(p.y) ? p.y : height / 2 + translateY;
+  const x = (screenX - width / 2 - translateX) / k;
+  const y = -(screenY - height / 2 - translateY) / k;
   return {
-    x: (p.x - vp.width / 2 - vp.translateX) / k,
-    y: -(p.y - vp.height / 2 - vp.translateY) / k,
+    x: Number.isFinite(x) ? x : 0,
+    y: Number.isFinite(y) ? y : 0,
   };
 }
 

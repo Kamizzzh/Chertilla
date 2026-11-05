@@ -163,8 +163,6 @@ const UCS_PREVIEW_DASH_PX = [8, 6];
 const LOUPE_RADIUS_PX = 50;
 const LOUPE_GAP_PX = 60;
 const LOUPE_ZOOM = 2;
-// Перекрестие в лупе: пустой промежуток в центре, чтобы было видно саму точку, px.
-const CROSSHAIR_GAP_PX = 5;
 
 // Запас области покрытия вокруг видимой области, в долях экрана (с каждой стороны).
 // 0.5 — покрытие строится заново, если вид сдвинули больше чем на полэкрана
@@ -1756,15 +1754,11 @@ export function DrawingCanvas({
     if (!touch.get()) return noPath;
     const { x, y } = loupeCenter.get();
     const arm = LOUPE_RADIUS_PX;
-    const gap = CROSSHAIR_GAP_PX;
     const path = Skia.PathBuilder.Make();
+    // Две непрерывные тонкие линии пересекаются ровно в точке вставки.
     path.moveTo(x - arm, y);
-    path.lineTo(x - gap, y);
-    path.moveTo(x + gap, y);
     path.lineTo(x + arm, y);
     path.moveTo(x, y - arm);
-    path.lineTo(x, y - gap);
-    path.moveTo(x, y + gap);
     path.lineTo(x, y + arm);
     return path.build();
   });
@@ -2452,7 +2446,7 @@ export function DrawingCanvas({
               <Path path={loupeCircle} style="fill" color={canvasColors.background} />
               <Group clip={loupeCircle}>
                 <Group transform={loupeTransform}>{scene}</Group>
-                <Path path={crosshair} style="stroke" strokeWidth={1.5} color={COLORS.crosshair} />
+                <Path path={crosshair} style="stroke" strokeWidth={1} color={COLORS.crosshair} />
               </Group>
               <Path path={loupeCircle} style="stroke" strokeWidth={4} color={canvasColors.loupeRim} />
               <Path

@@ -221,6 +221,7 @@ type Props = {
   nativeGesture: SharedNativeGesture;
   activeTool: Tool;
   onSelectTool: (tool: Tool) => void;
+  onResetTool: () => void;
   onSelectDimensionAxis: (axis: DimensionAxis) => void;
   constructionMethodIds: Record<ConstructionTool, string>;
   onSelectConstructionMethod: (tool: ConstructionTool, methodId: string) => void;
@@ -402,6 +403,7 @@ export function Toolbar({
   nativeGesture,
   activeTool,
   onSelectTool,
+  onResetTool,
   onSelectDimensionAxis,
   constructionMethodIds,
   onSelectConstructionMethod,
@@ -444,9 +446,13 @@ export function Toolbar({
 
   const toggleCategory = (id: CategoryId) => {
     hideTooltip();
+    const nextCategory = activeCategory === id ? null : id;
+    // При смене вкладки старое построение не остаётся активным за подменю.
+    if (nextCategory === 'editing') onSelectTool('select');
+    else onResetTool();
     setActiveMethodTool(null);
     setDisplayedCategory(id);
-    setActiveCategory((current) => (current === id ? null : id));
+    setActiveCategory(nextCategory);
   };
 
   const openMethods = (tool: ConstructionTool) => {
@@ -513,7 +519,11 @@ export function Toolbar({
         right={insets.right + 12}
         bottom={methodsBottom}
         onSelect={selectMethod}
-        onClose={() => setActiveMethodTool(null)}
+        onClose={() => {
+          setActiveMethodTool(null);
+          setActiveCategory(null);
+          onResetTool();
+        }}
         onShowTooltip={showTooltip}
         onHideTooltip={hideTooltip}
       />

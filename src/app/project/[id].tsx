@@ -338,8 +338,8 @@ export default function ProjectScreen() {
   const [devPerfVisible, setDevPerfVisible] = useState(false);
   // Долгое нажатие DEV включает реальный UI FPS поверх обычного чертежа.
   const [fpsOverlayVisible, setFpsOverlayVisible] = useState(false);
-  // Привязка к сетке (шаг 10 мм) для тапа, лупы и рукояток. По умолчанию выключена.
-  const [snapToGrid, setSnapToGrid] = useState(false);
+  // Привязка к сетке (шаг 10 мм) для тапа, лупы и рукояток. По умолчанию включена.
+  const [snapToGrid, setSnapToGrid] = useState(true);
   // Орто-режим: вторая точка отрезка или прямой даёт строго горизонтальную/вертикальную линию.
   const [isOrthoEnabled, setIsOrthoEnabled] = useState(false);
 
@@ -492,12 +492,28 @@ export default function ProjectScreen() {
     }
   };
 
+  /** Полностью завершает текущую операцию и по умолчанию возвращает холст в режим пана. */
+  const resetCurrentTool = (nextTool: Tool = 'none') => {
+    clearPending();
+    setCoordModalVisible(false);
+    setEditModalVisible(false);
+    selectShapes([]);
+    setMarqueePending(false);
+    canvasRef.current?.cancelMarquee();
+    canvasRef.current?.cancelPendingInput();
+    if (isConstructionTool(tool)) {
+      setConstructionMethodIds((current) => ({
+        ...current,
+        [tool]: DEFAULT_METHOD_IDS[tool],
+      }));
+      if (tool === 'dimension') setDimensionAxis('aligned');
+    }
+    setTool(nextTool);
+  };
+
   const selectTool = (next: Tool) => {
     recordAction(next === 'none' ? 'Инструмент отключен' : `Выбран инструмент: ${TOOL_NAMES[next]}`);
-    setTool(next);
-    clearPending(); // при смене инструмента недостроенная фигура сбрасывается
-    selectShapes([]); // и выделение тоже
-    canvasRef.current?.cancelMarquee(); // и начатая рамка
+    resetCurrentTool(next);
   };
 
   const handleLineStyleChange = (next: LineStyle) => {
@@ -531,6 +547,8 @@ export default function ProjectScreen() {
   };
 
   const activateUcs = (ucsId: string) => {
+    // Даже повторный выбор текущей СК отменяет незавершённое создание и старый инструмент.
+    resetCurrentTool('none');
     if (ucsId === activeUcsId) return;
     const previousId = activeUcsId;
     setActiveUcsId(ucsId);
@@ -545,6 +563,7 @@ export default function ProjectScreen() {
 
   const deleteUcs = (ucsId: string) => {
     if (ucsId === WCS.id) return;
+    resetCurrentTool('none');
     const nextList = ucsList.filter((ucs) => ucs.id !== ucsId);
     const nextHistory = ucsActivationStack.filter(
       (id) => id !== ucsId && nextList.some((ucs) => ucs.id === id),
@@ -739,18 +758,9 @@ export default function ProjectScreen() {
     clearPending();
   };
 
-  /** Полная отмена операции: ни старых точек, ни выбранных объектов, ни открытой лупы. */
+  /** Полная отмена операции с сохранением выбранного инструмента. */
   const cancelConstruction = () => {
-    clearPending();
-    setCoordModalVisible(false);
-    canvasRef.current?.cancelPendingInput();
-    if (isConstructionTool(tool)) {
-      setConstructionMethodIds((current) => ({
-        ...current,
-        [tool]: DEFAULT_METHOD_IDS[tool],
-      }));
-      if (tool === 'dimension') setDimensionAxis('aligned');
-    }
+    resetCurrentTool(tool);
     recordAction('Построение отменено');
   };
 
@@ -1661,10 +1671,7 @@ export default function ProjectScreen() {
               </Text>
               <View style={styles.actionButtons}>
                 <Pressable
-                  onPress={() => {
-                    setUcsCreationActive(false);
-                    setUcsOrigin(null);
-                  }}
+                  onPress={() => resetCurrentTool('none')}
                   style={({ pressed }) => [styles.actionButton, pressed && styles.actionButtonPressed]}>
                   <Text style={styles.actionButtonText}>Отмена</Text>
                 </Pressable>
@@ -1849,6 +1856,7 @@ export default function ProjectScreen() {
         nativeGesture={submenuNativeGesture}
         activeTool={tool}
         onSelectTool={selectTool}
+        onResetTool={resetCurrentTool}
         onSelectDimensionAxis={selectDimensionAxis}
         constructionMethodIds={constructionMethodIds}
         onSelectConstructionMethod={selectConstructionMethod}
