@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from 'react';
 import { ScrollView, StyleSheet, Text, View, type ViewInstance } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
@@ -21,7 +29,6 @@ import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import type { DimensionAxis, Tool } from '@/types/shapes';
 import type { UcsAction } from '@/types/ucs';
-import type { SharedNativeGesture } from '@/types/gestures';
 import { WCS } from '@/utils/ucs';
 
 type ActiveTool = Exclude<Tool, 'none'>;
@@ -80,13 +87,6 @@ const CATEGORIES: Record<CategoryId, Category> = {
     icon: 'ruler',
     items: [
       { kind: 'tool', id: 'dimension', tool: 'dimension', label: 'Размеры', icon: 'ruler' },
-      {
-        kind: 'tool',
-        id: 'intersect',
-        tool: 'intersect',
-        label: 'Пересечение',
-        icon: 'vector-intersection',
-      },
       { kind: 'tool', id: 'divide', tool: 'divide', label: 'Разделить', icon: 'call-split' },
     ],
   },
@@ -142,10 +142,6 @@ const ITEM_TOOLTIPS: Record<string, { description: string; preview: TooltipPrevi
     description: 'Открывает выбор вида размера и способа измерения.',
     preview: 'dimension',
   },
-  'tool:intersect': {
-    description: 'Создаёт точку в пересечении двух выбранных фигур.',
-    preview: 'intersect',
-  },
   'tool:divide': {
     description: 'Делит отрезок, окружность или дугу на равные части.',
     preview: 'divide',
@@ -188,7 +184,7 @@ const CATEGORY_TOOLTIPS: Record<CategoryId, TooltipContent> = {
   },
   analysis: {
     title: 'Анализ',
-    description: 'Открывает размеры, пересечения и деление фигур.',
+    description: 'Открывает размеры и деление фигур.',
     preview: 'dimension',
   },
   editing: {
@@ -217,9 +213,13 @@ const SUBMENU_GAP = 8;
 const TOOL_SUBMENU_COMPACT_HEIGHT = 66;
 const TOOL_SUBMENU_HEIGHT = 82;
 
+export type ToolbarHandle = {
+  dismissMenus: () => void;
+};
+
 type Props = {
-  nativeGesture: SharedNativeGesture;
   activeTool: Tool;
+  onMenuVisibilityChange: (visible: boolean) => void;
   onSelectTool: (tool: Tool) => void;
   onResetTool: () => void;
   onSelectDimensionAxis: (axis: DimensionAxis) => void;
@@ -326,7 +326,7 @@ function ToolSubmenu({
 
   return (
     <Animated.View
-      pointerEvents="box-none"
+      pointerEvents={visible ? 'box-none' : 'none'}
       accessibilityElementsHidden={!visible}
       importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
       style={[styles.submenu, { left, right, bottom }, animatedStyle]}>
@@ -399,9 +399,9 @@ function ToolSubmenu({
  * Нижняя CAD-панель: категории, способы построения и подсказки по удержанию.
  * Длинное нажатие никогда не активирует инструмент или действие.
  */
-export function Toolbar({
-  nativeGesture,
+export const Toolbar = forwardRef<ToolbarHandle, Props>(function Toolbar({
   activeTool,
+  onMenuVisibilityChange,
   onSelectTool,
   onResetTool,
   onSelectDimensionAxis,
@@ -418,7 +418,7 @@ export function Toolbar({
   activeUcsId,
   ucsCreationActive,
   onUcsAction,
-}: Props) {
+}: Props, ref) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
@@ -444,6 +444,19 @@ export function Toolbar({
   };
   const hideTooltip = () => setTooltip(null);
 
+  const dismissMenus = () => {
+    hideTooltip();
+    setActiveCategory(null);
+    setActiveMethodTool(null);
+    onResetTool();
+  };
+
+  useImperativeHandle(ref, () => ({ dismissMenus }));
+
+  useEffect(() => {
+    onMenuVisibilityChange(activeCategory !== null || activeMethodTool !== null);
+  }, [activeCategory, activeMethodTool, onMenuVisibilityChange]);
+
   const toggleCategory = (id: CategoryId) => {
     hideTooltip();
     const nextCategory = activeCategory === id ? null : id;
@@ -455,10 +468,12 @@ export function Toolbar({
     setActiveCategory(nextCategory);
   };
 
-  const openMethods = (tool: ConstructionTool) => {
+  const openMethods = (nextTool: ConstructionTool) => {
     hideTooltip();
-    setDisplayedMethodTool(tool);
-    setActiveMethodTool(tool);
+    // Другой инструмент не наследует незавершённые точки и объекты предыдущего.
+    if (nextTool !== activeMethodTool || nextTool !== activeTool) onResetTool();
+    setDisplayedMethodTool(nextTool);
+    setActiveMethodTool(nextTool);
     // Категория остаётся под способами: на экране видна вся иерархия.
   };
 
@@ -511,7 +526,6 @@ export function Toolbar({
       />
 
       <SubMenu
-        nativeGesture={nativeGesture}
         tool={displayedMethodTool}
         visible={activeMethodTool !== null}
         selectedMethodId={constructionMethodIds[displayedMethodTool]}
@@ -519,11 +533,7 @@ export function Toolbar({
         right={insets.right + 12}
         bottom={methodsBottom}
         onSelect={selectMethod}
-        onClose={() => {
-          setActiveMethodTool(null);
-          setActiveCategory(null);
-          onResetTool();
-        }}
+        onClose={dismissMenus}
         onShowTooltip={showTooltip}
         onHideTooltip={hideTooltip}
       />
@@ -644,7 +654,7 @@ export function Toolbar({
       {tooltip && <Tooltip content={tooltip.content} anchor={tooltip.anchor} />}
     </View>
   );
-}
+});
 
 const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, type ComponentProps } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
-import { GestureDetector } from 'react-native-gesture-handler';
+import { StyleSheet, Text, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 
@@ -13,7 +12,6 @@ import {
 import type { ThemeColors } from '@/constants/theme';
 import { useTheme } from '@/context/ThemeContext';
 import type { DimensionAxis, Tool } from '@/types/shapes';
-import type { SharedNativeGesture } from '@/types/gestures';
 
 type IconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
 const SUBMENU_ANIMATION_MS = 180;
@@ -57,7 +55,7 @@ export const CONSTRUCTION_METHODS: Record<ConstructionTool, SubMenuOption[]> = {
       id: 'free',
       label: 'Свободная',
       description: 'Ставит точку в выбранном месте чертежа.',
-      icon: 'circle-outline',
+      icon: 'vector-point',
       preview: 'point',
       implemented: true,
     },
@@ -281,7 +279,6 @@ export function isConstructionTool(tool: Tool): tool is ConstructionTool {
 }
 
 type Props = {
-  nativeGesture: SharedNativeGesture;
   tool: ConstructionTool;
   visible: boolean;
   selectedMethodId: string;
@@ -296,7 +293,6 @@ type Props = {
 
 /** Второй уровень нижней панели: способы построения выбранного инструмента. */
 export function SubMenu({
-  nativeGesture,
   tool,
   visible,
   selectedMethodId,
@@ -368,25 +364,12 @@ export function SubMenu({
           </TooltipPressable>
         </View>
 
-        <GestureDetector gesture={nativeGesture}>
-          <FlatList
-            data={options}
-          horizontal
-          scrollEnabled
-          nestedScrollEnabled
-          showsHorizontalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          style={styles.optionsScroll}
-          contentContainerStyle={{ paddingHorizontal: 16 }}
-          keyExtractor={(option) => option.id}
-          extraData={selectedMethodId}
-          onScrollBeginDrag={() => console.log('[SubMenu] scroll onStart')}
-          onScroll={(event) => console.log('[SubMenu] scroll onUpdate', event.nativeEvent.contentOffset.x)}
-          onScrollEndDrag={() => console.log('[SubMenu] scroll onEnd')}
-          renderItem={({ item: option }) => {
+        <View style={styles.optionsGrid}>
+          {options.map((option) => {
             const active = option.id === selectedMethodId;
             return (
               <TooltipPressable
+                key={option.id}
                 onPress={() => onSelect(option)}
                 tooltip={{
                   title: option.label,
@@ -416,9 +399,8 @@ export function SubMenu({
                 {!option.implemented && <Text style={styles.futureBadge}>Скоро</Text>}
               </TooltipPressable>
             );
-          }}
-          />
-        </GestureDetector>
+          })}
+        </View>
 
         {selected && !selected.implemented && (
           <Text style={styles.futureHint}>Этот способ пока только в интерфейсе.</Text>
@@ -474,18 +456,19 @@ const createStyles = (colors: ThemeColors) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    optionsScroll: {
+    optionsGrid: {
       width: '100%',
-      height: 76,
-      flexGrow: 0,
-      flexShrink: 1,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      paddingHorizontal: 8,
     },
     optionButton: {
-      width: 116,
+      width: '31%',
+      maxWidth: 116,
       height: 76,
       flexShrink: 0,
-      marginRight: 8,
-      paddingHorizontal: 6,
+      paddingHorizontal: 4,
       paddingVertical: 5,
       borderRadius: 8,
       alignItems: 'center',

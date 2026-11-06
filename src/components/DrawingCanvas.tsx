@@ -39,7 +39,6 @@ import {
 } from '@/constants/lineStyles';
 import type { LineStyle, Shape, Tool } from '@/types/shapes';
 import type { UCS } from '@/types/ucs';
-import type { SharedNativeGesture } from '@/types/gestures';
 import {
   angleTo,
   arcBox,
@@ -215,7 +214,6 @@ export type EditMode = 'none' | 'drag';
 
 type Props = {
   ref?: Ref<DrawingCanvasHandle>;
-  nativeGesture: SharedNativeGesture;
   tool: Tool;
   /** Выбранный способ текущего инструмента; нужен, чтобы «Орто» не менял специальные методы. */
   constructionMethodId: string | null;
@@ -1144,7 +1142,6 @@ function touchTargetToScreen(vp: Viewport, p: Point, ucs: UCS): Point {
 
 export function DrawingCanvas({
   ref,
-  nativeGesture,
   tool,
   constructionMethodId,
   shapes,
@@ -1888,7 +1885,6 @@ export function DrawingCanvas({
   // В режиме перетаскивания рукояток тапа и рамки нет — один палец мимо рукоятки двигает вид.
   // Только меняет сдвиг — никакого поиска привязки.
   const pan = Gesture.Pan()
-    .simultaneousWithExternalGesture(nativeGesture)
     .minPointers((tool === 'none' && !ucsCreationActive) || dragMode ? 1 : 2)
     .averageTouches(true)
     .onStart(startInteraction)
@@ -1901,7 +1897,6 @@ export function DrawingCanvas({
   // Зум щипком: точка чертежа под пальцами остаётся на месте.
   // Тоже только меняет сдвиг и масштаб — никакого поиска привязки.
   const pinch = Gesture.Pinch()
-    .simultaneousWithExternalGesture(nativeGesture)
     .onStart(startInteraction)
     .onChange((e) => {
       const prevScale = scale.get();
@@ -1932,7 +1927,6 @@ export function DrawingCanvas({
   // (лупа или рамка выделения), а не тап.
   // В режиме перетаскивания рукояток тап выключен: выделение не должно сбиться случайным касанием.
   const tap = Gesture.Tap()
-    .simultaneousWithExternalGesture(nativeGesture)
     .enabled((tool !== 'none' || ucsCreationActive) && !dragMode)
     .runOnJS(true)
     .maxDistance(TAP_MAX_DISTANCE_PX)
@@ -2047,7 +2041,6 @@ export function DrawingCanvas({
   // одного пальца и сразу отменяется, если на экране появился второй палец.
   // При «Выделении» лупы нет: точку ставить не нужно, а один палец тянет рамку выделения.
   const loupe = Gesture.Pan()
-    .simultaneousWithExternalGesture(nativeGesture)
     .enabled(drawingTool || ucsCreationActive)
     .activateAfterLongPress(LONG_PRESS_MS)
     .maxPointers(1)
@@ -2098,7 +2091,6 @@ export function DrawingCanvas({
   // Короткий тап до срабатывания зажатия — обычный тап (выбор одной фигуры).
   // Второй палец — это пан или зум, рамку отменяем. В режиме перетаскивания рукояток рамки нет.
   const marqueeGesture = Gesture.Pan()
-    .simultaneousWithExternalGesture(nativeGesture)
     .enabled(selectTool && !dragMode)
     .activateAfterLongPress(LONG_PRESS_MS)
     .maxPointers(1)
@@ -2179,7 +2171,6 @@ export function DrawingCanvas({
   // Отпустили палец — новая фигура уходит в историю (onUpdateShape), один шаг на перетаскивание.
   // Второй палец отменяет перетаскивание: фигура возвращается на место.
   const handleDrag = Gesture.Pan()
-    .simultaneousWithExternalGesture(nativeGesture)
     .enabled(dragMode)
     .minDistance(0)
     .maxPointers(1)
@@ -2267,7 +2258,6 @@ export function DrawingCanvas({
   // Касание в другом месте сразу отдаётся рамке, а второй палец отменяет перемещение
   // и позволяет обычным жестам пана/зума работать без конфликта.
   const shapeMove = Gesture.Pan()
-    .simultaneousWithExternalGesture(nativeGesture)
     .enabled(selectTool && !dragMode && selectedShapes.length === 1)
     .minDistance(MOVE_START_DISTANCE_PX)
     .maxPointers(1)

@@ -1,8 +1,18 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, BackHandler, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  BackHandler,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSharedValue } from 'react-native-reanimated';
-import { Gesture } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -21,7 +31,7 @@ import { PerfToggle, RealTimeFpsOverlay } from '@/components/PerfMonitor';
 import { SelectionVignette } from '@/components/SelectionVignette';
 import { SettingsModal } from '@/components/SettingsModal';
 import { DEFAULT_METHOD_IDS, isConstructionTool, type ConstructionTool } from '@/components/SubMenu';
-import { Toolbar } from '@/components/Toolbar';
+import { Toolbar, type ToolbarHandle } from '@/components/Toolbar';
 import { FLOATING_MARGIN, TopBar } from '@/components/TopBar';
 import { UcsMethodModal, UcsModal } from '@/components/UcsModal';
 import { XLineMenu } from '@/components/XLineMenu';
@@ -197,23 +207,12 @@ function goToMenu() {
 export default function ProjectScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const canvasRef = useRef<DrawingCanvasHandle>(null);
+  const toolbarRef = useRef<ToolbarHandle>(null);
+  const [toolbarMenusVisible, setToolbarMenusVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { colors, colorScheme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const canvasColors = CANVAS_COLORS[colorScheme];
-  // Один Native-жест связывает прокрутку подменю с жестами холста через внешние отношения RNGH.
-  const submenuNativeGesture = useMemo(
-    () =>
-      Gesture.Native()
-        .onStart(() => {
-          console.log('[SubMenu] native onStart');
-        })
-        .onEnd(() => {
-          console.log('[SubMenu] native onEnd');
-        }),
-    [],
-  );
-
   const [tool, setTool] = useState<Tool>('none');
   // Фигуры чертежа и история действий (Отменить / Вернуть).
   const {
@@ -494,6 +493,7 @@ export default function ProjectScreen() {
 
   /** Полностью завершает текущую операцию и по умолчанию возвращает холст в режим пана. */
   const resetCurrentTool = (nextTool: Tool = 'none') => {
+    Keyboard.dismiss();
     clearPending();
     setCoordModalVisible(false);
     setEditModalVisible(false);
@@ -1533,7 +1533,9 @@ export default function ProjectScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.container}>
       <TopBar
         projectName={isDirty ? `${projectName} •` : projectName}
         canUndo={canUndo}
@@ -1552,7 +1554,6 @@ export default function ProjectScreen() {
       <View style={styles.canvasArea}>
         <DrawingCanvas
           ref={canvasRef}
-          nativeGesture={submenuNativeGesture}
           tool={tool}
           constructionMethodId={constructionMethodId}
           shapes={shapes}
@@ -1577,6 +1578,15 @@ export default function ProjectScreen() {
           onMarqueePendingChange={setMarqueePending}
           onUpdateShape={handleCanvasUpdateShape}
         />
+
+        {toolbarMenusVisible && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть меню инструментов"
+            onPress={() => toolbarRef.current?.dismissMenus()}
+            style={styles.menuDismissArea}
+          />
+        )}
 
         {fpsOverlayVisible && (
           <RealTimeFpsOverlay style={{ top: 8, left: insets.left + FLOATING_MARGIN }} />
@@ -1853,8 +1863,9 @@ export default function ProjectScreen() {
       </View>
 
       <Toolbar
-        nativeGesture={submenuNativeGesture}
+        ref={toolbarRef}
         activeTool={tool}
+        onMenuVisibilityChange={setToolbarMenusVisible}
         onSelectTool={selectTool}
         onResetTool={resetCurrentTool}
         onSelectDimensionAxis={selectDimensionAxis}
@@ -1935,7 +1946,7 @@ export default function ProjectScreen() {
         onCancel={() => setEditModalVisible(false)}
         onSubmit={handleEditSubmit}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -1947,6 +1958,9 @@ const createStyles = (colors: ThemeColors) =>
     },
     canvasArea: {
       flex: 1,
+    },
+    menuDismissArea: {
+      ...StyleSheet.absoluteFill,
     },
     bottomOverlay: {
       position: 'absolute',
