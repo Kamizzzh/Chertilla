@@ -52,7 +52,10 @@
         "expo-build-properties",
         {
           "android": {
-            "enableMinifyInReleaseBuilds": true
+            "enableMinifyInReleaseBuilds": true,
+            "buildArchs": [
+              "arm64-v8a"
+            ]
           }
         }
       ]

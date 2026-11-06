@@ -3,6 +3,14 @@ name: Android Build (Release APK)
 on:
   workflow_dispatch:
 
+env:
+  EAS_USE_CACHE: '1'
+  CCACHE_DIR: /home/runner/.ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPILERCHECK: content
+  CMAKE_C_COMPILER_LAUNCHER: ccache
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -38,6 +46,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-npm-
 
+      - name: Cache C++ compilation
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ hashFiles('package-lock.json') }}-
+            ${{ runner.os }}-ccache-
+
+      - name: Set up ccache
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ccache
+          mkdir -p "$CCACHE_DIR"
+          ccache --max-size "$CCACHE_MAXSIZE"
+          ccache --zero-stats
+
       - name: Install npm dependencies
         run: npm ci
 
@@ -49,6 +74,10 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
+
+      - name: Show ccache statistics
+        if: always()
+        run: ccache --show-stats
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
